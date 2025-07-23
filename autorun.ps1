@@ -116,7 +116,7 @@ function Install-ChocolateyPackage {
             Write-Warning "Chocolatey command not found. Cannot install $PackageName."
         }
     } catch {
-        Write-Error "An error occurred while trying to install $PackageName: $($_.Exception.Message)"
+        Write-Error "An error occurred while trying to install packages."
     }
 }
 
