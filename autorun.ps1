@@ -6,7 +6,7 @@
 # has security implications. Use with caution and for personal use only.
 #
 # Winget Note: Winget is typically pre-installed on modern Windows 11 versions.
-# If it's not available for some reason, the installations will fail.
+# This script includes steps to ensure Winget is updated and its sources are ready.
 
 #region 1. Set Execution Policy for OOBE (if necessary)
 # This might be needed if running from a restricted environment during OOBE.
@@ -14,7 +14,6 @@
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 #endregion
 
-#region 2. Create Local Admin User 'NS' and Prompt for Password
 #region 2. Create Local Admin User 'NS' and Prompt for Password
 Write-Host "Setting up local administrator user 'NS'."
 $Username = "NS"
@@ -24,10 +23,14 @@ while ($true) {
     $ConfirmPasswordSecure = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
 
     # Convert SecureString to plain text for comparison only
-    # Note: This temporarily exposes the password in memory. For OOBE, where user
-    # is physically present and interacting, this is generally acceptable for verification.
-    $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
-    $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
+    try {
+        $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
+        $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
+    } catch {
+        Write-Error "Failed to process password input. Ensure PowerShell is running correctly. Error: $($_.Exception.Message)"
+        exit 1 # Exit script if password processing fails
+    }
+
 
     if ($PasswordPlain -eq $ConfirmPasswordPlain) {
         # If passwords match, use the SecureString for New-LocalUser
@@ -61,51 +64,90 @@ try {
 }
 #endregion
 
-#region 3. Install Software using Winget
-Write-Host "Starting software installations using Winget..."
+#region 3. Prepare and Install Software using Winget
+Write-Host "Preparing Winget and starting software installations..."
 
-# Function to install a package using Winget
-function Install-WingetPackage {
-    param(
-        [string]$PackageId,
-        [string]$PackageName # For display purposes
-    )
-
-    Write-Host "Attempting to install $PackageName (ID: $PackageId) using Winget..."
+# Function to ensure Winget is updated and sources are healthy
+function Ensure-WingetReady {
+    Write-Host "Checking Winget status and updating if necessary..."
     try {
-        # Check if winget is available
+        # Check if winget command exists
         if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            Write-Error "Winget is not found. Please ensure it's installed and in the PATH."
-            return
+            Write-Warning "Winget command not found. Attempting to install/re-register DesktopAppInstaller."
+            # Attempt to download and install the latest App Installer (which includes Winget)
+            # This is a common fix for fresh installs where Winget is old or not fully registered.
+            $wingetInstallerUri = "https://aka.ms/getwinget"
+            $wingetInstallerPath = "$env:TEMP\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+            
+            Invoke-WebRequest -Uri $wingetInstallerUri -OutFile $wingetInstallerPath -DisableStrictSSL -ErrorAction Stop
+            Add-AppxPackage -Path $wingetInstallerPath -Register -ErrorAction Stop
+            Remove-Item $wingetInstallerPath -ErrorAction SilentlyContinue
+            Write-Host "Attempted to install/re-register App Installer. Please wait a moment for Winget to initialize."
+            Start-Sleep -Seconds 10 # Give it some time to initialize
         }
 
-        # Attempt to install the package
-        # /h means silent, /e means exact match, --accept-package-agreements and --accept-source-agreements
-        # are crucial for non-interactive installs.
-        $wingetOutput = & winget install --id "$PackageId" -h -e --accept-package-agreements --accept-source-agreements 2>&1
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$PackageName installed successfully."
-        } elseif ($LASTEXITCODE -eq 1700) { # Winget exit code for already installed
-            Write-Warning "$PackageName (ID: $PackageId) is already installed."
-        } else {
-            Write-Error "Failed to install $PackageName (ID: $PackageId). Winget output: $wingetOutput. Exit Code: $LASTEXITCODE"
+        # Verify winget is now available
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+             Write-Error "Winget is still not found after attempted installation/re-registration. Cannot proceed with Winget installations."
+             return $false
         }
+
+        Write-Host "Winget found. Updating sources..."
+        # Reset sources to ensure they are fresh
+        & winget source reset --force --accept-source-agreements 2>&1 | Write-Verbose
+
+        # Update sources to get the latest package lists
+        & winget source update --accept-source-agreements 2>&1 | Write-Verbose
+
+        Write-Host "Winget sources updated."
+        return $true
     } catch {
-        Write-Error "An error occurred while trying to install a package."
+        Write-Error "Failed to ensure Winget is ready: $($_.Exception.Message)"
+        return $false
     }
 }
 
-# List of applications to install with their Winget IDs
-# You can find Package IDs by running 'winget search <AppName>'
-Install-WingetPackage -PackageName "Google Chrome" -PackageId "Google.Chrome"
-Install-WingetPackage -PackageName "7-Zip" -PackageId "7zip.7zip"
-Install-WingetPackage -PackageName "WinDirStat" -PackageId "WinDirStat.WinDirStat"
-Install-WingetPackage -PackageName "Everything" -PackageId "Voidtools.Everything"
-Install-WingetPackage -PackageName "Notepad++" -PackageId "Notepad++.Notepad++"
-Install-WingetPackage -PackageName "VLC Media Player" -PackageId "VideoLAN.VLC"
+# Ensure Winget is ready before attempting installations
+if (-not (Ensure-WingetReady)) {
+    Write-Error "Winget could not be prepared. Skipping all Winget-based software installations."
+    # You might want to add a fallback here, eg., to manual downloads if Winget fails critically.
+} else {
+    # Function to install a package using Winget
+    function Install-WingetPackage {
+        param(
+            [string]$PackageId,
+            [string]$PackageName # For display purposes
+        )
 
-Write-Host "Software installations complete."
+        Write-Host "Attempting to install $PackageName (ID: $PackageId) using Winget..."
+        try {
+            # Attempt to install the package
+            # /h means silent, /e means exact match, --accept-package-agreements and --accept-source-agreements
+            # are crucial for non-interactive installs.
+            $wingetOutput = & winget install --id "$PackageId" -h -e --accept-package-agreements --accept-source-agreements 2>&1
+
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "$PackageName installed successfully."
+            } elseif ($LASTEXITCODE -eq 1700) { # Winget exit code for already installed
+                Write-Warning "$PackageName (ID: $PackageId) is already installed."
+            } else {
+                Write-Error "Failed to install $PackageName (ID: $PackageId). Winget output: $wingetOutput. Exit Code: $LASTEXITCODE"
+            }
+        } catch {
+            Write-Error "An error occurred while trying to install $PackageName: $($_.Exception.Message)"
+        }
+    }
+
+    # List of applications to install with their Winget IDs
+    Install-WingetPackage -PackageName "Google Chrome" -PackageId "Google.Chrome"
+    Install-WingetPackage -PackageName "7-Zip" -PackageId "7zip.7zip"
+    Install-WingetPackage -PackageName "WinDirStat" -PackageId "WinDirStat.WinDirStat"
+    Install-WingetPackage -PackageName "Everything" -PackageId "Voidtools.Everything"
+    Install-WingetPackage -PackageName "Notepad++" -PackageId "Notepad++.Notepad++"
+    Install-WingetPackage -PackageName "VLC Media Player" -PackageId "VideoLAN.VLC"
+
+    Write-Host "Software installations complete."
+}
 #endregion
 
 #region 4. Set Dark Mode
@@ -122,9 +164,7 @@ try {
 #region 5. Disable UAC Popups (Set to 'Never Notify')
 Write-Host "Disabling UAC popups (setting to Never Notify)..."
 try {
-    # Setting EnableLUA to 0 effectively disables UAC. This is a significant security reduction.
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction Stop
-    # The following two keys are less critical if EnableLUA is 0, but included for completeness of "Never Notify" state.
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction Stop
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction Stop
     Write-Host "UAC popups disabled."
@@ -136,13 +176,10 @@ try {
 #region 6. Remove Shortcut Overlay on Icons
 Write-Host "Removing shortcut overlay on icons..."
 try {
-    # Registry path for shell icons
     $ShellIconPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    # Create the path if it doesn't exist
     if (-not (Test-Path $ShellIconPath)) {
         New-Item -Path $ShellIconPath -Force | Out-Null
     }
-    # Set the value for icon 29 (shortcut overlay) to a blank icon within shell32.dll
     Set-ItemProperty -Path $ShellIconPath -Name "29" -Value "`%windir`%\System32\shell32.dll,-50" -Force -ErrorAction Stop
     Write-Host "Shortcut overlay removal setting applied. A restart/Explorer restart might be needed."
 } catch {
@@ -153,9 +190,7 @@ try {
 #region 7. Snap Window Settings
 Write-Host "Configuring Snap Window settings..."
 try {
-    # Don't suggest what can be snapped (DisableSnapAssist: 1 = Disabled)
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "DisableSnapAssist" -Value 1 -Force -ErrorAction Stop
-    # Don't show snap layouts when window is dragged to the top of a screen (EnableSnapOverlay: 0 = Disabled)
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapOverlay" -Value 0 -Force -ErrorAction Stop
     Write-Host "Snap Window settings configured."
 } catch {
@@ -166,18 +201,10 @@ try {
 #region 8. Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
 Write-Host "Configuring Taskbar settings..."
 try {
-    # Move Taskbar to Left (TaskbarAl: 0 = Left, 1 = Center)
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction Stop
-
-    # Disable Task View Button (ShowTaskViewButton: 0 = Hidden)
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force -ErrorAction Stop
-
-    # Disable Widgets Button (TaskbarDa: 0 = Hidden)
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction Stop
-
-    # Hide Search Bar (SearchboxTaskbarMode: 0 = Hidden, 1 = Icon, 2 = Icon and Label, 3 = Search Bar)
+    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction Stop # Widgets button
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SearchboxTaskbarMode" -Value 0 -Force -ErrorAction Stop
-
     Write-Host "Taskbar settings configured. A restart/Explorer restart might be needed for full effect."
 } catch {
     Write-Error "Failed to configure Taskbar settings: $($_.Exception.Message)"
@@ -187,7 +214,6 @@ try {
 #region 9. Enable Windows 10 Style Context Menu
 Write-Host "Enabling Windows 10 style context menu..."
 try {
-    # This registry modification enables the legacy context menu by overriding the default behavior.
     $CLSIDPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
     if (-not (Test-Path $CLSIDPath)) {
         New-Item -Path $CLSIDPath -Force | Out-Null
@@ -199,26 +225,31 @@ try {
 }
 #endregion
 
+#region 10. Bypass Remaining OOBE Screens
+Write-Host "Attempting to bypass remaining OOBE screens..."
+try {
+    # Set UnattendDone to signal OOBE completion (DWORD value 1)
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -Name "UnattendDone" -Value 1 -Force -ErrorAction Stop
+
+    # Suppress OOBE UI (DWORD value 0)
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\Setup" -Name "SetupUI" -Value 0 -Force -ErrorAction Stop
+
+    # Set OOBE to be "complete" (DWORD value 1)
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -Name "OOBEComplete" -Value 1 -Force -ErrorAction Stop
+
+    Write-Host "OOBE bypass settings applied."
+} catch {
+    Write-Error "Failed to apply OOBE bypass settings: $($_.Exception.Message)"
+}
+#endregion
+
 Write-Host "Script execution complete. The system will now restart to apply all changes."
 
-#region 10. Auto Reboot
+#region 11. Auto Reboot
 # Give the user a few seconds to see the completion message
 Start-Sleep -Seconds 5
 
-# --- Choose one of the following reboot options ---
-
-# Option A: Force immediate reboot (no prompt)
-# Restart-Computer -Force
-
 # Option B: Reboot with a countdown and force (recommended for OOBE unattended setup)
-# This will show a shutdown warning for 30 seconds before rebooting.
-shutdown.exe /r /t 1 /f /c "System configuration complete. Rebooting to apply changes."
-
-# Option C: Prompt for reboot (less ideal for OOBE automation unless you want intervention)
-# $rebootChoice = Read-Host "Do you want to reboot now to apply all changes? (Y/N)"
-# if ($rebootChoice -eq 'Y') {
-#     Restart-Computer -Force
-# } else {
-#     Write-Host "Please remember to reboot the system manually for all changes to take effect."
-# }
+# This will show a shutdown warning for 5 seconds before rebooting.
+shutdown.exe /r /t 5 /f /c "System configuration complete. Rebooting to apply changes."
 #endregion
