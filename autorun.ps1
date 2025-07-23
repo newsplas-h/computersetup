@@ -76,7 +76,7 @@ function Install-WingetPackage {
             Write-Error "Failed to install $PackageName (ID: $PackageId). Winget output: $wingetOutput. Exit Code: $LASTEXITCODE"
         }
     } catch {
-        Write-Error "An error occurred while trying to install $PackageName: $($_.Exception.Message)"
+        Write-Error "An error occurred while trying to install a package."
     }
 }
 
