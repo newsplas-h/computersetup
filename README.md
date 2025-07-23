@@ -3,6 +3,7 @@ Contains setup scripts for my computers. Currently holds a Powershell script for
 
 How to use on Win 11 OOBE:
 
+Set up wifi network manually
 
 Shift + F10
 
