@@ -116,7 +116,7 @@ function Install-ChocolateyPackage {
             Write-Warning "Chocolatey command not found. Cannot install $PackageName."
         }
     } catch {
-        Write-Error "An error occurred while trying to install packages."
+        Write-Error "An error occurred while trying to install packages: $($_.Exception.Message)"
     }
 }
 
@@ -240,19 +240,43 @@ try {
 
 #region 12. Bypass Remaining OOBE Screens (Attempt 2 - after name change, might be more effective)
 Write-Host "Attempting to bypass remaining OOBE screens (final attempt)..."
+
+# Define registry paths and values
+$oobePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
+$oobeSetupPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\Setup"
+
 try {
+    # Ensure the OOBE paths exist
+    if (-not (Test-Path $oobePath)) { New-Item -Path $oobePath -Force | Out-Null }
+    if (-not (Test-Path $oobeSetupPath)) { New-Item -Path $oobeSetupPath -Force | Out-Null }
+
     # Set UnattendDone to signal OOBE completion (DWORD value 1)
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -Name "UnattendDone" -Value 1 -Force -ErrorAction Stop
+    try {
+        Set-ItemProperty -Path $oobePath -Name "UnattendDone" -Value 1 -Force -ErrorAction Stop
+        Write-Host "  - Set UnattendDone successfully."
+    } catch {
+        Write-Warning "  - Failed to set UnattendDone: $($_.Exception.Message)"
+    }
 
     # Suppress OOBE UI (DWORD value 0)
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\Setup" -Name "SetupUI" -Value 0 -Force -ErrorAction Stop
+    try {
+        Set-ItemProperty -Path $oobeSetupPath -Name "SetupUI" -Value 0 -Force -ErrorAction Stop
+        Write-Host "  - Set SetupUI successfully."
+    } catch {
+        Write-Warning "  - Failed to set SetupUI: $($_.Exception.Message)"
+    }
 
     # Set OOBE to be "complete" (DWORD value 1)
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -Name "OOBEComplete" -Value 1 -Force -ErrorAction Stop
+    try {
+        Set-ItemProperty -Path $oobePath -Name "OOBEComplete" -Value 1 -Force -ErrorAction Stop
+        Write-Host "  - Set OOBEComplete successfully."
+    } catch {
+        Write-Warning "  - Failed to set OOBEComplete: $($_.Exception.Message)"
+    }
 
-    Write-Host "OOBE bypass settings applied."
+    Write-Host "OOBE bypass settings applied (check warnings for specific failures)."
 } catch {
-    Write-Error "Failed to apply OOBE bypass settings: $($_.Exception.Message)"
+    Write-Error "An overall error occurred trying to access OOBE registry paths: $($_.Exception.Message)"
 }
 #endregion
 
