@@ -5,12 +5,13 @@
 # Security Note: Prompting for a password in a script pulled from a public source
 # has security implications. Use with caution and for personal use only.
 #
-# Winget Note: Winget is typically pre-installed on modern Windows 11 versions.
-# This script includes steps to ensure Winget is updated and its sources are ready.
+# OOBE Bypass Note: While this script attempts to bypass remaining OOBE screens,
+# fully unattended OOBE is best achieved using an Autounattend.xml file applied
+# to the installation media or during sysprep. This script acts as a post-OOBE
+# intervention and may not suppress all prompts in all scenarios.
 
 #region 1. Set Execution Policy for OOBE (if necessary)
-# This might be needed if running from a restricted environment during OOBE.
-# It's good practice to set it back or let the system default later.
+# This is crucial for running the Chocolatey installation script.
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 #endregion
 
@@ -22,135 +23,117 @@ while ($true) {
     $PasswordSecure = Read-Host -AsSecureString "Please enter a password for the user '$Username':"
     $ConfirmPasswordSecure = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
 
-    # Convert SecureString to plain text for comparison only
     try {
         $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
         $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
     } catch {
         Write-Error "Failed to process password input. Ensure PowerShell is running correctly. Error: $($_.Exception.Message)"
-        exit 1 # Exit script if password processing fails
+        exit 1
     }
 
-
     if ($PasswordPlain -eq $ConfirmPasswordPlain) {
-        # If passwords match, use the SecureString for New-LocalUser
-        $Password = $PasswordSecure # Assign the SecureString back to $Password for the New-LocalUser cmdlet
-        # Clear plain text versions from memory immediately after comparison
+        $Password = $PasswordSecure
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
         break
     } else {
         Write-Warning "Passwords do not match. Please try again."
-        # Clear plain text versions from memory
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
     }
 }
 
 try {
-    # Check if user already exists
     if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
-        # Ensure $Password here is the SecureString version
         New-LocalUser -Name $Username -Password $Password -FullName "NS Admin" -Description "Local Administrator"
         Add-LocalGroupMember -Group "Administrators" -Member $Username
         Write-Host "User '$Username' created and added to Administrators group successfully."
     } else {
         Write-Host "User '$Username' already exists."
-        # Optionally, you could update the password here if the user already exists
-        # Get-LocalUser -Name $Username | Set-LocalUser -Password $Password
     }
 } catch {
     Write-Error "Failed to create user or add to Administrators group: $($_.Exception.Message)"
 }
 #endregion
 
-#region 3. Prepare and Install Software using Winget
-Write-Host "Preparing Winget and starting software installations..."
-
-# Function to ensure Winget is updated and sources are healthy
-function Ensure-WingetReady {
-    Write-Host "Checking Winget status and updating if necessary..."
-    try {
-        # Check if winget command exists
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            Write-Warning "Winget command not found. Attempting to install/re-register DesktopAppInstaller."
-            # Attempt to download and install the latest App Installer (which includes Winget)
-            # This is a common fix for fresh installs where Winget is old or not fully registered.
-            $wingetInstallerUri = "https://aka.ms/getwinget"
-            $wingetInstallerPath = "$env:TEMP\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
-            
-            Invoke-WebRequest -Uri $wingetInstallerUri -OutFile $wingetInstallerPath -DisableStrictSSL -ErrorAction Stop
-            Add-AppxPackage -Path $wingetInstallerPath -Register -ErrorAction Stop
-            Remove-Item $wingetInstallerPath -ErrorAction SilentlyContinue
-            Write-Host "Attempted to install/re-register App Installer. Please wait a moment for Winget to initialize."
-            Start-Sleep -Seconds 10 # Give it some time to initialize
-        }
-
-        # Verify winget is now available
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-             Write-Error "Winget is still not found after attempted installation/re-registration. Cannot proceed with Winget installations."
-             return $false
-        }
-
-        Write-Host "Winget found. Updating sources..."
-        # Reset sources to ensure they are fresh
-        & winget source reset --force --accept-source-agreements 2>&1 | Write-Verbose
-
-        # Update sources to get the latest package lists
-        & winget source update --accept-source-agreements 2>&1 | Write-Verbose
-
-        Write-Host "Winget sources updated."
-        return $true
-    } catch {
-        Write-Error "Failed to ensure Winget is ready: $($_.Exception.Message)"
-        return $false
-    }
-}
-
-# Ensure Winget is ready before attempting installations
-if (-not (Ensure-WingetReady)) {
-    Write-Error "Winget could not be prepared. Skipping all Winget-based software installations."
-    # You might want to add a fallback here, eg., to manual downloads if Winget fails critically.
+#region 3. Set Computer Name
+Write-Host "Setting the Computer Name..."
+$ComputerName = Read-Host "Please enter the desired computer name (e.g., DESKTOP-NS01):"
+if ([string]::IsNullOrWhiteSpace($ComputerName)) {
+    Write-Warning "Computer name cannot be empty. Skipping computer rename."
 } else {
-    # Function to install a package using Winget
-    function Install-WingetPackage {
-        param(
-            [string]$PackageId,
-            [string]$PackageName # For display purposes
-        )
-
-        Write-Host "Attempting to install $PackageName (ID: $PackageId) using Winget..."
-        try {
-            # Attempt to install the package
-            # /h means silent, /e means exact match, --accept-package-agreements and --accept-source-agreements
-            # are crucial for non-interactive installs.
-            $wingetOutput = & winget install --id "$PackageId" -h -e --accept-package-agreements --accept-source-agreements 2>&1
-
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "$PackageName installed successfully."
-            } elseif ($LASTEXITCODE -eq 1700) { # Winget exit code for already installed
-                Write-Warning "$PackageName (ID: $PackageId) is already installed."
-            } else {
-                Write-Error "Failed to install $PackageName (ID: $PackageId). Winget output: $wingetOutput. Exit Code: $LASTEXITCODE"
-            }
-        } catch {
-            Write-Error "An error occurred while trying to install this package."
-        }
+    try {
+        Rename-Computer -NewName $ComputerName -Force
+        Write-Host "Computer name set to '$ComputerName'. Requires reboot."
+    } catch {
+        Write-Error "Failed to set computer name: $($_.Exception.Message)"
     }
-
-    # List of applications to install with their Winget IDs
-    Install-WingetPackage -PackageName "Google Chrome" -PackageId "Google.Chrome"
-    Install-WingetPackage -PackageName "7-Zip" -PackageId "7zip.7zip"
-    Install-WingetPackage -PackageName "WinDirStat" -PackageId "WinDirStat.WinDirStat"
-    Install-WingetPackage -PackageName "Everything" -PackageId "Voidtools.Everything"
-    Install-WingetPackage -PackageName "Notepad++" -PackageId "Notepad++.Notepad++"
-    Install-WingetPackage -PackageName "VLC Media Player" -PackageId "VideoLAN.VLC"
-
-    Write-Host "Software installations complete."
 }
 #endregion
 
-#region 4. Set Dark Mode
+#region 4. Install Software using Chocolatey
+Write-Host "Starting software installations using Chocolatey..."
+
+# Check and install Chocolatey if not present
+if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    Write-Host "Chocolatey is not installed. Installing Chocolatey..."
+    try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        Write-Host "Chocolatey installed successfully."
+        # Give it a moment to initialize in the current session
+        Start-Sleep -Seconds 5
+    } catch {
+        Write-Error "Failed to install Chocolatey: $($_.Exception.Message)"
+        Write-Warning "Skipping all Chocolatey-based software installations."
+    }
+} else {
+    Write-Host "Chocolatey is already installed."
+}
+
+# Function to install a package using Chocolatey
+function Install-ChocolateyPackage {
+    param(
+        [string]$PackageId,
+        [string]$PackageName # For display purposes
+    )
+
+    Write-Host "Attempting to install $PackageName (ID: $PackageId) using Chocolatey..."
+    try {
+        if (Get-Command choco -ErrorAction SilentlyContinue) {
+            # Check if already installed
+            $installed = (choco list --local-only --limit-output | Select-String -Pattern "^$PackageId" -ErrorAction SilentlyContinue)
+            if ($installed) {
+                Write-Warning "$PackageName (ID: $PackageId) is already installed."
+            } else {
+                & choco install "$PackageId" -y --no-progress 2>&1 | Write-Verbose
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "$PackageName installed successfully."
+                } else {
+                    Write-Error "Failed to install $PackageName (ID: $PackageId). Chocolatey exit code: $LASTEXITCODE"
+                }
+            }
+        } else {
+            Write-Warning "Chocolatey command not found. Cannot install $PackageName."
+        }
+    } catch {
+        Write-Error "An error occurred while trying to install $PackageName: $($_.Exception.Message)"
+    }
+}
+
+# List of applications to install with their Chocolatey IDs
+if (Get-Command choco -ErrorAction SilentlyContinue) {
+    Install-ChocolateyPackage -PackageName "Google Chrome" -PackageId "googlechrome"
+    Install-ChocolateyPackage -PackageName "7-Zip" -PackageId "7zip"
+    Install-ChocolateyPackage -PackageName "WinDirStat" -PackageId "windirstat"
+    Install-ChocolateyPackage -PackageName "Everything" -PackageId "everything"
+    Install-ChocolateyPackage -PackageName "Notepad++" -PackageId "notepadplusplus"
+    Install-ChocolateyPackage -PackageName "VLC Media Player" -PackageId "vlc"
+}
+
+Write-Host "Software installations complete."
+#endregion
+
+#region 5. Set Dark Mode
 Write-Host "Setting Dark Mode..."
 try {
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force -ErrorAction Stop
@@ -161,7 +144,7 @@ try {
 }
 #endregion
 
-#region 5. Disable UAC Popups (Set to 'Never Notify')
+#region 6. Disable UAC Popups (Set to 'Never Notify')
 Write-Host "Disabling UAC popups (setting to Never Notify)..."
 try {
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction Stop
@@ -173,7 +156,7 @@ try {
 }
 #endregion
 
-#region 6. Remove Shortcut Overlay on Icons
+#region 7. Remove Shortcut Overlay on Icons
 Write-Host "Removing shortcut overlay on icons..."
 try {
     $ShellIconPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
@@ -187,7 +170,7 @@ try {
 }
 #endregion
 
-#region 7. Snap Window Settings
+#region 8. Snap Window Settings
 Write-Host "Configuring Snap Window settings..."
 try {
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "DisableSnapAssist" -Value 1 -Force -ErrorAction Stop
@@ -198,7 +181,7 @@ try {
 }
 #endregion
 
-#region 8. Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
+#region 9. Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
 Write-Host "Configuring Taskbar settings..."
 try {
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction Stop
@@ -211,7 +194,7 @@ try {
 }
 #endregion
 
-#region 9. Enable Windows 10 Style Context Menu
+#region 10. Enable Windows 10 Style Context Menu
 Write-Host "Enabling Windows 10 style context menu..."
 try {
     $CLSIDPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
@@ -225,8 +208,38 @@ try {
 }
 #endregion
 
-#region 10. Bypass Remaining OOBE Screens
-Write-Host "Attempting to bypass remaining OOBE screens..."
+#region 11. Configure Display Power Settings
+Write-Host "Configuring Display Power Settings..."
+try {
+    # Get the GUID of the active power scheme
+    $activeScheme = (powercfg /getactivescheme) | Select-String -Pattern "Power Scheme GUID: ([\da-fA-F-]+)" | ForEach-Object { $_.Matches[0].Groups[1].Value }
+
+    if (-not [string]::IsNullOrWhiteSpace($activeScheme)) {
+        Write-Host "Active Power Scheme GUID: $activeScheme"
+        # Turn off display: Never on AC power (0 minutes)
+        # powercfg /setacvalueindex <SCHEME_GUID> <SUB_GROUP_GUID> <SETTING_GUID> <VALUE>
+        # Monitor timeout subgroup GUID: 7516B95F-F776-4464-8C53-06167F40CC99
+        # Display timeout setting GUID: 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798
+        & powercfg /setacvalueindex $activeScheme SUB_MONITOR 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798 0
+        Write-Host "Display will never turn off on AC power."
+
+        # Turn off display: After 15 minutes on Battery power (15 minutes = 900 seconds)
+        & powercfg /setdcvalueindex $activeScheme SUB_MONITOR 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798 900
+        Write-Host "Display will turn off after 15 minutes on Battery power."
+
+        # Apply the changes to the active power scheme
+        & powercfg /setactive $activeScheme
+        Write-Host "Display power settings applied."
+    } else {
+        Write-Warning "Could not determine active power scheme. Skipping display power settings."
+    }
+} catch {
+    Write-Error "Failed to configure display power settings: $($_.Exception.Message)"
+}
+#endregion
+
+#region 12. Bypass Remaining OOBE Screens (Attempt 2 - after name change, might be more effective)
+Write-Host "Attempting to bypass remaining OOBE screens (final attempt)..."
 try {
     # Set UnattendDone to signal OOBE completion (DWORD value 1)
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -Name "UnattendDone" -Value 1 -Force -ErrorAction Stop
@@ -245,11 +258,10 @@ try {
 
 Write-Host "Script execution complete. The system will now restart to apply all changes."
 
-#region 11. Auto Reboot
+#region 13. Auto Reboot
 # Give the user a few seconds to see the completion message
 Start-Sleep -Seconds 5
 
 # Option B: Reboot with a countdown and force (recommended for OOBE unattended setup)
-# This will show a shutdown warning for 5 seconds before rebooting.
 shutdown.exe /r /t 5 /f /c "System configuration complete. Rebooting to apply changes."
 #endregion
