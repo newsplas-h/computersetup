@@ -183,9 +183,26 @@ try {
 }
 #endregion
 
-Write-Host "Script execution complete. Some changes may require a system restart or logging out and back in."
-Write-Host "It is recommended to restart the system now for all changes to take effect."
+Write-Host "Script execution complete. The system will now restart to apply all changes."
 
-# Optional: To restart Explorer.exe for some changes to take effect immediately (not recommended during OOBE without careful consideration)
-# Stop-Process -Name "explorer" -Force
-# Start-Process -FilePath "explorer.exe"
+#region 10. Auto Reboot
+# Give the user a few seconds to see the completion message
+Start-Sleep -Seconds 5
+
+# --- Choose one of the following reboot options ---
+
+# Option A: Force immediate reboot (no prompt)
+# Restart-Computer -Force
+
+# Option B: Reboot with a countdown and force (recommended for OOBE unattended setup)
+# This will show a shutdown warning for 30 seconds before rebooting.
+shutdown.exe /r /t 1 /f /c "System configuration complete. Rebooting to apply changes."
+
+# Option C: Prompt for reboot (less ideal for OOBE automation unless you want intervention)
+# $rebootChoice = Read-Host "Do you want to reboot now to apply all changes? (Y/N)"
+# if ($rebootChoice -eq 'Y') {
+#     Restart-Computer -Force
+# } else {
+#     Write-Host "Please remember to reboot the system manually for all changes to take effect."
+# }
+#endregion
