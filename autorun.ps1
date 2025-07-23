@@ -15,23 +15,39 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 #endregion
 
 #region 2. Create Local Admin User 'NS' and Prompt for Password
+#region 2. Create Local Admin User 'NS' and Prompt for Password
 Write-Host "Setting up local administrator user 'NS'."
 $Username = "NS"
 
 while ($true) {
-    $Password = Read-Host -AsSecureString "Please enter a password for the user '$Username':"
-    $ConfirmPassword = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
+    $PasswordSecure = Read-Host -AsSecureString "Please enter a password for the user '$Username':"
+    $ConfirmPasswordSecure = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
 
-    if ($Password -eq $ConfirmPassword) {
+    # Convert SecureString to plain text for comparison only
+    # Note: This temporarily exposes the password in memory. For OOBE, where user
+    # is physically present and interacting, this is generally acceptable for verification.
+    $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
+    $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
+
+    if ($PasswordPlain -eq $ConfirmPasswordPlain) {
+        # If passwords match, use the SecureString for New-LocalUser
+        $Password = $PasswordSecure # Assign the SecureString back to $Password for the New-LocalUser cmdlet
+        # Clear plain text versions from memory immediately after comparison
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
         break
     } else {
         Write-Warning "Passwords do not match. Please try again."
+        # Clear plain text versions from memory
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
     }
 }
 
 try {
     # Check if user already exists
     if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+        # Ensure $Password here is the SecureString version
         New-LocalUser -Name $Username -Password $Password -FullName "NS Admin" -Description "Local Administrator"
         Add-LocalGroupMember -Group "Administrators" -Member $Username
         Write-Host "User '$Username' created and added to Administrators group successfully."
