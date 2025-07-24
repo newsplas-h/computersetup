@@ -195,7 +195,7 @@ $StartupFolderPath = Join-Path (Join-Path "C:\Users" $Username) "AppData\Roaming
 # Create directories if they don't exist
 try {
     New-Item -Path $SetupDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-    New-Item -Path $StartupFolderPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    New-Item -Path $StartupFolderPath -ItemType Directory -Force -ErrorAction Stop | Out-Nulll
 } catch {
     Write-Error "Failed to create necessary directories for first logon script: $($_.Exception.Message)"
     # Consider exiting or skipping this section if directory creation fails
@@ -345,8 +345,7 @@ $UnattendXmlContent = @"
                     </LocalAccount>
                 </LocalAccounts>
             </UserAccounts>
-            <TimeZone>Eastern Standard Time</TimeZone> <!-- Adjust this for your region -->
-            <ComputerName>$ComputerName</ComputerName>
+            <TimeZone>Eastern Standard Time</TimeZone> <ComputerName>$ComputerName</ComputerName>
         </component>
         <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <InputLocale>en-US</InputLocale>
@@ -370,7 +369,7 @@ try {
     $UnattendXmlContent | Out-File -FilePath $UnattendFilePath -Encoding utf8 -Force -ErrorAction Stop
     Write-Host "Unattend.xml generated and placed at '$UnattendFilePath'."
 
-    # Clear the plain text password variable immediately after use
+    # Clear the plain text password variable immediately after use in script's memory
     $PasswordPlainForUnattend = $null
 
 } catch {
@@ -433,15 +432,13 @@ try {
         Write-Host "Removed temporary setup directory: $SetupDir"
     }
 
-    # IMPORTANT: Attempt to remove the generated unattend.xml file after it's used
-    # This helps with security by not leaving the plain text password file on disk.
-    if (Test-Path $UnattendFilePath) {
-        Remove-Item -Path $UnattendFilePath -Force -ErrorAction SilentlyContinue
-        Write-Host "Removed generated unattend.xml file."
-    }
+    # IMPORTANT: The unattend.xml is deliberately NOT removed here.
+    # It must remain in C:\Windows\Panther\ for Windows Setup to process it on the next boot.
+    # Windows Setup will typically remove it automatically after use.
+    Write-Host "Unattend.xml will remain in C:\Windows\Panther\ for Windows Setup to process after reboot."
 
 } catch {
-    Write-Error "Failed to clean up temporary directory or unattend.xml: $($_.Exception.Message)"
+    Write-Error "Failed to clean up temporary directory: $($_.Exception.Message)"
 }
 #endregion
 
