@@ -32,7 +32,7 @@ Write-Host "Setting up local administrator user."
 # Get Username from user input
 $Username = ""
 while ([string]::IsNullOrWhiteSpace($Username)) {
-    $Username = Read-Host "Please enter the desired local administrator username:"
+    $Username = Read-Host "Please enter the desired local administrator username (e.g., NS, Admin, User):"
     if ([string]::IsNullOrWhiteSpace($Username)) {
         Write-Warning "Username cannot be empty. Please try again."
     }
@@ -47,25 +47,27 @@ Write-Host "Admin username set to: '$Username'."
 # Using Add-Type for SecureString to String conversion, which is safer than direct memory manipulation
 Add-Type -AssemblyName System.Security
 
+# Variable to hold the plain text password temporarily for unattend.xml generation
+$PasswordPlainForUnattend = ""
+
 while ($true) {
     $PasswordSecure = Read-Host -AsSecureString "Please enter a password for the user '$Username':"
     $ConfirmPasswordSecure = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
 
-    # Convert SecureString to plain string for comparison only.
-    # It's crucial not to store or log the plain text password.
-    $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
+    # Convert SecureString to plain string for comparison and unattend.xml.
+    # It's crucial not to store or log the plain text password long-term.
+    $PasswordPlainForUnattend = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
     $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
 
-    if ($PasswordPlain -eq $ConfirmPasswordPlain) {
-        $Password = $PasswordSecure
+    if ($PasswordPlainForUnattend -eq $ConfirmPasswordPlain) {
+        $Password = $PasswordSecure # This is the SecureString for New-LocalUser
         # Securely clear plain text password variables immediately after comparison
-        $PasswordPlain = $null
         $ConfirmPasswordPlain = $null
         break
     } else {
         Write-Warning "Passwords do not match. Please try again."
         # Securely clear plain text password variables
-        $PasswordPlain = $null
+        $PasswordPlainForUnattend = $null # Clear this if passwords don't match
         $ConfirmPasswordPlain = $null
     }
 }
@@ -306,22 +308,99 @@ try {
 }
 #endregion
 
-#region 9. Bypass Remaining OOBE Screens (Registry Flags)
-Write-Host "Applying registry keys to bypass remaining OOBE screens..."
-$oobePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
-try {
-    if (-not (Test-Path $oobePath)) { New-Item -Path $oobePath -ItemType Directory -Force | Out-Null }
+#region 9. Generate and Place Unattend.xml for OOBE Bypass
+Write-Host "Generating and placing unattend.xml for OOBE bypass..."
 
-    # CRITICAL: This key tells setup to allow skipping the network connection screen.
-    Set-ItemProperty -Path $oobePath -Name "BypassNRO" -Value 1 -Type DWord -Force -ErrorAction Stop
-    
-    # These keys signal to Windows that OOBE is complete.
-    Set-ItemProperty -Path $oobePath -Name "OOBEComplete" -Value 1 -Type DWord -Force -ErrorAction Stop
-    Set-ItemProperty -Path $oobePath -Name "UnattendDone" -Value 1 -Type DWord -Force -ErrorAction Stop
-    
-    Write-Host "OOBE bypass keys set successfully."
+# Define the path for the unattend.xml file
+# C:\Windows\Panther\ is a common location Windows Setup checks for unattend files
+$UnattendFilePath = "C:\Windows\Panther\unattend.xml"
+
+# Define the XML content for the unattend.xml file
+# This XML will use variables for dynamic content like Username, Password, and ComputerName
+# IMPORTANT: The password is in plain text here for automation.
+# For production, consider encrypting or using other secure deployment methods.
+$UnattendXmlContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Work</NetworkLocation>
+                <SkipUserOOBE>true</SkipUserOOBE>
+                <SkipMachineOOBE>true</SkipMachineOOBE>
+            </OOBE>
+            <UserAccounts>
+                <LocalAccounts>
+                    <LocalAccount wcm:action="add">
+                        <DisplayName>$Username Admin</DisplayName>
+                        <Group>Administrators</Group>
+                        <Name>$Username</Name>
+                        <Password>
+                            <PlainText>true</PlainText>
+                            <Value>$PasswordPlainForUnattend</Value>
+                        </Password>
+                    </LocalAccount>
+                </LocalAccounts>
+            </UserAccounts>
+            <TimeZone>Eastern Standard Time</TimeZone> <!-- Adjust this for your region -->
+            <ComputerName>$ComputerName</ComputerName>
+        </component>
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>en-US</InputLocale>
+            <SystemLocale>en-US</SystemLocale>
+            <UILanguage>en-US</UILanguage>
+            <UILanguageFallback>en-US</UILanguageFallback>
+            <UserLocale>en-US</UserLocale>
+        </component>
+    </settings>
+</unattend>
+"@
+
+try {
+    # Ensure the Panther directory exists
+    $PantherDir = Split-Path $UnattendFilePath -Parent
+    if (-not (Test-Path $PantherDir)) {
+        New-Item -Path $PantherDir -ItemType Directory -Force | Out-Null
+    }
+
+    # Save the generated XML content to the file
+    $UnattendXmlContent | Out-File -FilePath $UnattendFilePath -Encoding utf8 -Force -ErrorAction Stop
+    Write-Host "Unattend.xml generated and placed at '$UnattendFilePath'."
+
+    # Clear the plain text password variable immediately after use
+    $PasswordPlainForUnattend = $null
+
 } catch {
-    Write-Error "Failed to set OOBE bypass registry keys: $($_.Exception.Message)"
+    Write-Error "Failed to generate or place unattend.xml: $($_.Exception.Message)"
+}
+#endregion
+
+#region 9.1. Bypass Remaining OOBE Screens (Registry Flags - Supplemental)
+Write-Host "Applying supplemental registry keys for OOBE bypass..."
+# These registry keys act as a backup/supplement to the unattend.xml file.
+$oobeMainPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
+$oobeSetupPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE" # Path for SetupDisplayed
+
+try {
+    # Ensure both OOBE registry paths exist
+    if (-not (Test-Path $oobeMainPath)) { New-Item -Path $oobeMainPath -ItemType Directory -Force | Out-Null }
+    if (-not (Test-Path $oobeSetupPath)) { New-Item -Path $oobeSetupPath -ItemType Directory -Force | Out-Null }
+
+    # Keys under HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE
+    Set-ItemProperty -Path $oobeMainPath -Name "BypassNRO" -Value 1 -Type DWord -Force -ErrorAction Stop # Bypass Network Requirement OOBE
+    Set-ItemProperty -Path $oobeMainPath -Name "OOBEComplete" -Value 1 -Type DWord -Force -ErrorAction Stop   # Signal OOBE is complete
+    Set-ItemProperty -Path $oobeMainPath -Name "UnattendDone" -Value 1 -Type DWord -Force -ErrorAction Stop   # Signal unattended setup is done
+    Set-ItemProperty -Path $oobeMainPath -Name "PrivacySettingsDone" -Value 1 -Type DWord -Force -ErrorAction Stop # Bypass Privacy Settings screen
+
+    # Key under HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE
+    Set-ItemProperty -Path $oobeSetupPath -Name "SetupDisplayed" -Value 1 -Type DWord -Force -ErrorAction Stop
+    
+    Write-Host "Supplemental OOBE bypass registry keys set successfully."
+} catch {
+    Write-Error "Failed to set supplemental OOBE bypass registry keys: $($_.Exception.Message)"
 }
 #endregion
 
@@ -353,8 +432,16 @@ try {
         Remove-Item -Path $SetupDir -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "Removed temporary setup directory: $SetupDir"
     }
+
+    # IMPORTANT: Attempt to remove the generated unattend.xml file after it's used
+    # This helps with security by not leaving the plain text password file on disk.
+    if (Test-Path $UnattendFilePath) {
+        Remove-Item -Path $UnattendFilePath -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed generated unattend.xml file."
+    }
+
 } catch {
-    Write-Error "Failed to clean up temporary directory: $($_.Exception.Message)"
+    Write-Error "Failed to clean up temporary directory or unattend.xml: $($_.Exception.Message)"
 }
 #endregion
 
