@@ -32,7 +32,7 @@ Write-Host "Setting up local administrator user."
 # Get Username from user input
 $Username = ""
 while ([string]::IsNullOrWhiteSpace($Username)) {
-    $Username = Read-Host "Please enter the desired local administrator username (e.g., NS, Admin, User):"
+    $Username = Read-Host "Please enter the desired local administrator username:"
     if ([string]::IsNullOrWhiteSpace($Username)) {
         Write-Warning "Username cannot be empty. Please try again."
     }
