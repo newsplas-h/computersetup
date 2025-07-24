@@ -1,17 +1,11 @@
 # This script is designed to be run during Windows 11 Out-of-Box Experience (OOBE)
-# It requires an active internet connection.
+# It requires an active internet connection for Chocolatey.
 #
-# IMPORTANT: Review and understand the script before running it.
-# Security Note: Prompting for a password in a script pulled from a public source
-# has security implications. Use with caution and for personal use only.
-#
-# OOBE Bypass Note: While this script attempts to bypass remaining OOBE screens,
-# fully unattended OOBE is best achieved using an Autounattend.xml file applied
-# to the installation media or during sysprep. This script acts as a post-OOBE
-# intervention and may not suppress all prompts in all scenarios.
+# HOW TO RUN: During OOBE (e.g., at the language selection screen), press Shift+F10
+# to open Command Prompt. Type 'powershell' and press Enter. Then run the command
+# to download and execute this script, e.g., irm https://your-link.com/script.ps1 | iex
 
-#region 1. Set Execution Policy for OOBE (if necessary)
-# This is crucial for running the Chocolatey installation script.
+#region 1. Set Execution Policy for OOBE
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 #endregion
 
@@ -27,7 +21,7 @@ while ($true) {
         $PasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
         $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
     } catch {
-        Write-Error "Failed to process password input. Ensure PowerShell is running correctly. Error: $($_.Exception.Message)"
+        Write-Error "Failed to process password input. Error: $($_.Exception.Message)"
         exit 1
     }
 
@@ -45,7 +39,7 @@ while ($true) {
 
 try {
     if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
-        New-LocalUser -Name $Username -Password $Password -FullName "NS Admin" -Description "Local Administrator"
+        New-LocalUser -Name $Username -Password $Password -FullName "NS Admin" -Description "Local Administrator" -PasswordNeverExpires
         Add-LocalGroupMember -Group "Administrators" -Member $Username
         Write-Host "User '$Username' created and added to Administrators group successfully."
     } else {
@@ -73,54 +67,36 @@ if ([string]::IsNullOrWhiteSpace($ComputerName)) {
 
 #region 4. Install Software using Chocolatey
 Write-Host "Starting software installations using Chocolatey..."
-
-# Check and install Chocolatey if not present
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Host "Chocolatey is not installed. Installing Chocolatey..."
     try {
         Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
         Write-Host "Chocolatey installed successfully."
-        # Give it a moment to initialize in the current session
         Start-Sleep -Seconds 5
     } catch {
         Write-Error "Failed to install Chocolatey: $($_.Exception.Message)"
-        Write-Warning "Skipping all Chocolatey-based software installations."
     }
 } else {
     Write-Host "Chocolatey is already installed."
 }
 
-# Function to install a package using Chocolatey
 function Install-ChocolateyPackage {
-    param(
-        [string]$PackageId,
-        [string]$PackageName # For display purposes
-    )
-
-    Write-Host "Attempting to install $PackageName (ID: $PackageId) using Chocolatey..."
+    param([string]$PackageId, [string]$PackageName)
+    Write-Host "Attempting to install $PackageName (ID: $PackageId)..."
     try {
         if (Get-Command choco -ErrorAction SilentlyContinue) {
-            # Check if already installed
             $installed = (choco list --local-only --limit-output | Select-String -Pattern "^$PackageId" -ErrorAction SilentlyContinue)
             if ($installed) {
-                Write-Warning "$PackageName (ID: $PackageId) is already installed."
+                Write-Warning "$PackageName is already installed."
             } else {
-                & choco install "$PackageId" -y --no-progress 2>&1 | Write-Verbose
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "$PackageName installed successfully."
-                } else {
-                    Write-Error "Failed to install $PackageName (ID: $PackageId). Chocolatey exit code: $LASTEXITCODE"
-                }
+                choco install "$PackageId" -y --no-progress
+                if ($LASTEXITCODE -eq 0) { Write-Host "$PackageName installed successfully." }
+                else { Write-Error "Failed to install $PackageName. Choco exit code: $LASTEXITCODE" }
             }
-        } else {
-            Write-Warning "Chocolatey command not found. Cannot install $PackageName."
-        }
-    } catch {
-        Write-Error "An error occurred while trying to install packages: $($_.Exception.Message)"
-    }
+        } else { Write-Warning "Choco not found. Cannot install $PackageName." }
+    } catch { Write-Error "An error occurred installing packages: $($_.Exception.Message)" }
 }
 
-# List of applications to install with their Chocolatey IDs
 if (Get-Command choco -ErrorAction SilentlyContinue) {
     Install-ChocolateyPackage -PackageName "Google Chrome" -PackageId "googlechrome"
     Install-ChocolateyPackage -PackageName "7-Zip" -PackageId "7zip"
@@ -129,28 +105,66 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
     Install-ChocolateyPackage -PackageName "Notepad++" -PackageId "notepadplusplus"
     Install-ChocolateyPackage -PackageName "VLC Media Player" -PackageId "vlc"
 }
-
-Write-Host "Software installations complete."
 #endregion
 
-#region 5. Set Dark Mode
-Write-Host "Setting Dark Mode..."
-try {
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force -ErrorAction Stop
-    Write-Host "Dark Mode enabled."
-} catch {
-    Write-Error "Failed to set Dark Mode: $($_.Exception.Message)"
-}
+#region 5. Create First-Logon Script for User-Specific Settings
+Write-Host "Creating first-logon script for user '$Username'..."
+$SetupDir = "C:\TempSetup"
+$FirstLogonScriptPath = Join-Path $SetupDir "FirstLogonSetup.ps1"
+$StartupFolderPath = "C:\Users\$Username\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+
+# Create directories if they don't exist
+New-Item -Path $SetupDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+New-Item -Path $StartupFolderPath -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+# Define the content for the first-logon script. This contains all HKCU changes.
+$FirstLogonScriptContent = @"
+# This script runs on the new user's first login to apply personal settings.
+Start-Sleep -Seconds 5 # Give the desktop a moment to load
+
+# Set Dark Mode
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force -ErrorAction SilentlyContinue
+
+# Configure Snap Window settings
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "DisableSnapAssist" -Value 1 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapOverlay" -Value 0 -Force -ErrorAction SilentlyContinue
+
+# Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SearchboxTaskbarMode" -Value 0 -Force -ErrorAction SilentlyContinue
+
+# Enable Windows 10 Style Context Menu
+`$CLSIDPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+if (-not (Test-Path `$CLSIDPath)) { New-Item -Path `$CLSIDPath -Force | Out-Null }
+Set-ItemProperty -Path `$CLSIDPath -Name "(Default)" -Value "" -Force -ErrorAction SilentlyContinue
+
+# Self-destruct this script and its startup shortcut after running
+Remove-Item -Path "`$MyInvocation.MyCommand.Path" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\ApplySettings.lnk" -Force -ErrorAction SilentlyContinue
+"@
+
+# Write the script content to the file
+$FirstLogonScriptContent | Out-File -FilePath $FirstLogonScriptPath -Encoding utf8 -Force
+
+# Create a shortcut in the user's startup folder to run the script silently
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut((Join-Path $StartupFolderPath "ApplySettings.lnk"))
+$Shortcut.TargetPath = "powershell.exe"
+$Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$FirstLogonScriptPath`""
+$Shortcut.Save()
+
+Write-Host "First logon script created successfully."
 #endregion
 
 #region 6. Disable UAC Popups (Set to 'Never Notify')
 Write-Host "Disabling UAC popups (setting to Never Notify)..."
 try {
+    # This setting, EnableLUA = 0, completely disables the UAC security boundary.
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction Stop
-    Write-Host "UAC popups disabled."
+    Write-Host "UAC popups disabled. A reboot is required for this to take effect."
 } catch {
     Write-Error "Failed to disable UAC popups: $($_.Exception.Message)"
 }
@@ -160,132 +174,52 @@ try {
 Write-Host "Removing shortcut overlay on icons..."
 try {
     $ShellIconPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    if (-not (Test-Path $ShellIconPath)) {
-        New-Item -Path $ShellIconPath -Force | Out-Null
-    }
+    if (-not (Test-Path $ShellIconPath)) { New-Item -Path $ShellIconPath -Force | Out-Null }
     Set-ItemProperty -Path $ShellIconPath -Name "29" -Value "%windir%\System32\shell32.dll,-50" -Force -ErrorAction Stop
-    Write-Host "Shortcut overlay removal setting applied. A restart/Explorer restart might be needed."
+    Write-Host "Shortcut overlay removal setting applied. Explorer restart needed."
 } catch {
     Write-Error "Failed to remove shortcut overlay: $($_.Exception.Message)"
 }
 #endregion
 
-#region 8. Snap Window Settings
-Write-Host "Configuring Snap Window settings..."
-try {
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "DisableSnapAssist" -Value 1 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapOverlay" -Value 0 -Force -ErrorAction Stop
-    Write-Host "Snap Window settings configured."
-} catch {
-    Write-Error "Failed to configure Snap Window settings: $($_.Exception.Message)"
-}
-#endregion
-
-#region 9. Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
-Write-Host "Configuring Taskbar settings..."
-try {
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force -ErrorAction Stop
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction Stop # Widgets button
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SearchboxTaskbarMode" -Value 0 -Force -ErrorAction Stop
-    Write-Host "Taskbar settings configured. A restart/Explorer restart might be needed for full effect."
-} catch {
-    Write-Error "Failed to configure Taskbar settings: $($_.Exception.Message)"
-}
-#endregion
-
-#region 10. Enable Windows 10 Style Context Menu
-Write-Host "Enabling Windows 10 style context menu..."
-try {
-    $CLSIDPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-    if (-not (Test-Path $CLSIDPath)) {
-        New-Item -Path $CLSIDPath -Force | Out-Null
-    }
-    Set-ItemProperty -Path $CLSIDPath -Name "(Default)" -Value "" -Force -ErrorAction Stop
-    Write-Host "Windows 10 style context menu enabled. A restart/Explorer restart might be needed."
-} catch {
-    Write-Error "Failed to enable Windows 10 style context menu: $($_.Exception.Message)"
-}
-#endregion
-
-#region 11. Configure Display Power Settings
+#region 8. Configure Display Power Settings
 Write-Host "Configuring Display Power Settings..."
 try {
-    # Get the GUID of the active power scheme
     $activeScheme = (powercfg /getactivescheme) | Select-String -Pattern "Power Scheme GUID: ([\da-fA-F-]+)" | ForEach-Object { $_.Matches[0].Groups[1].Value }
-
     if (-not [string]::IsNullOrWhiteSpace($activeScheme)) {
-        Write-Host "Active Power Scheme GUID: $activeScheme"
-        # Turn off display: Never on AC power (0 minutes)
-        # powercfg /setacvalueindex <SCHEME_GUID> <SUB_GROUP_GUID> <SETTING_GUID> <VALUE>
-        # Monitor timeout subgroup GUID: 7516B95F-F776-4464-8C53-06167F40CC99
-        # Display timeout setting GUID: 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798
-        & powercfg /setacvalueindex $activeScheme SUB_MONITOR 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798 0
-        Write-Host "Display will never turn off on AC power."
-
-        # Turn off display: After 15 minutes on Battery power (15 minutes = 900 seconds)
-        & powercfg /setdcvalueindex $activeScheme SUB_MONITOR 3C07ABF2-67EB-4BFC-8BB6-BFEA7D406798 900
-        Write-Host "Display will turn off after 15 minutes on Battery power."
-
-        # Apply the changes to the active power scheme
+        & powercfg /setacvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 0
+        & powercfg /setdcvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 900
         & powercfg /setactive $activeScheme
         Write-Host "Display power settings applied."
     } else {
-        Write-Warning "Could not determine active power scheme. Skipping display power settings."
+        Write-Warning "Could not determine active power scheme."
     }
 } catch {
     Write-Error "Failed to configure display power settings: $($_.Exception.Message)"
 }
 #endregion
 
-#region 12. Bypass Remaining OOBE Screens (Attempt 2 - after name change, might be more effective)
-Write-Host "Attempting to bypass remaining OOBE screens (final attempt)..."
-
-# Define registry paths and values
+#region 9. Bypass Remaining OOBE Screens
+Write-Host "Applying registry keys to bypass remaining OOBE screens..."
 $oobePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
-$oobeSetupPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\Setup"
-
 try {
-    # Ensure the OOBE paths exist
     if (-not (Test-Path $oobePath)) { New-Item -Path $oobePath -Force | Out-Null }
-    if (-not (Test-Path $oobeSetupPath)) { New-Item -Path $oobeSetupPath -Force | Out-Null }
 
-    # Set UnattendDone to signal OOBE completion (DWORD value 1)
-    try {
-        Set-ItemProperty -Path $oobePath -Name "UnattendDone" -Value 1 -Force -ErrorAction Stop
-        Write-Host "  - Set UnattendDone successfully."
-    } catch {
-        Write-Warning "  - Failed to set UnattendDone: $($_.Exception.Message)"
-    }
-
-    # Suppress OOBE UI (DWORD value 0)
-    try {
-        Set-ItemProperty -Path $oobeSetupPath -Name "SetupUI" -Value 0 -Force -ErrorAction Stop
-        Write-Host "  - Set SetupUI successfully."
-    } catch {
-        Write-Warning "  - Failed to set SetupUI: $($_.Exception.Message)"
-    }
-
-    # Set OOBE to be "complete" (DWORD value 1)
-    try {
-        Set-ItemProperty -Path $oobePath -Name "OOBEComplete" -Value 1 -Force -ErrorAction Stop
-        Write-Host "  - Set OOBEComplete successfully."
-    } catch {
-        Write-Warning "  - Failed to set OOBEComplete: $($_.Exception.Message)"
-    }
-
-    Write-Host "OOBE bypass settings applied (check warnings for specific failures)."
+    # CRITICAL: This key tells setup to allow skipping the network connection screen.
+    Set-ItemProperty -Path $oobePath -Name "BypassNRO" -Value 1 -Type DWord -Force
+    
+    # These keys signal to Windows that OOBE is complete.
+    Set-ItemProperty -Path $oobePath -Name "OOBEComplete" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path $oobePath -Name "UnattendDone" -Value 1 -Type DWord -Force
+    
+    Write-Host "OOBE bypass keys set successfully."
 } catch {
-    Write-Error "An overall error occurred trying to access OOBE registry paths: $($_.Exception.Message)"
+    Write-Error "Failed to set OOBE bypass registry keys: $($_.Exception.Message)"
 }
 #endregion
 
-Write-Host "Script execution complete. The system will now restart to apply all changes."
-
-#region 13. Auto Reboot
-# Give the user a few seconds to see the completion message
+#region 10. Auto Reboot
+Write-Host "Script execution complete. System will now restart to apply all changes."
 Start-Sleep -Seconds 5
-
-# Option B: Reboot with a countdown and force (recommended for OOBE unattended setup)
 shutdown.exe /r /t 5 /f /c "System configuration complete. Rebooting to apply changes."
 #endregion
