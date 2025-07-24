@@ -1,33 +1,8 @@
-# Windows 11 OOBE Automation Script with Self-Update and Unattend.xml
+# Windows 11 OOBE Automation Script with Unattend.xml
 # HOW TO RUN: Shift+F10 during OOBE > powershell >
 # irm https://raw.githubusercontent.com/<your-username>/<your-repo>/main/oobe.ps1 | iex
 
 #Requires -RunAsAdministrator
-
-#region 0. Self-Update
-function Self-Update {
-    param (
-        [string]$Url = "https://raw.githubusercontent.com/<your-username>/<your-repo>/main/oobe.ps1"
-    )
-
-    Write-Host "Checking for latest version from GitHub..." -ForegroundColor Yellow
-    try {
-        $latestScript = Invoke-RestMethod -Uri $Url -UseBasicParsing
-        if ($latestScript) {
-            Write-Host "Running the latest version of the script from GitHub..." -ForegroundColor Green
-            Invoke-Expression $latestScript
-            exit
-        } else {
-            Write-Warning "Failed to retrieve the script from GitHub. Running local copy instead."
-        }
-    } catch {
-        Write-Warning "Error fetching script from GitHub: $($_.Exception.Message)"
-    }
-}
-
-# Uncomment if you want to always self-update from GitHub
-# Self-Update -Url "https://raw.githubusercontent.com/<your-username>/<your-repo>/main/oobe.ps1"
-#endregion
 
 #region 1. Initialization
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
