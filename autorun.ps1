@@ -181,7 +181,7 @@ Write-Host "Configuring User Account Control (UAC) settings..."
 # The original script attempted to disable UAC completely by setting EnableLUA = 0.
 # This is a severe security risk and is strongly discouraged for any system, especially one connected to the internet.
 # UAC is a critical security feature that prevents unauthorized changes and privilege escalation.
-# [2]
+# [1]
 # Instead of disabling UAC, consider these alternatives to reduce prompts while maintaining security:
 # - Set ConsentPromptBehaviorAdmin to 5 (Prompt for consent on the secure desktop) or 2 (Prompt for credentials on the secure desktop).
 # - Set PromptOnSecureDesktop to 0 (to disable the secure desktop for prompts).
@@ -216,7 +216,7 @@ try {
 #region 8. Configure Display Power Settings
 Write-Host "Configuring Display Power Settings..."
 try {
-    $activeScheme = (powercfg /getactivescheme) | Select-String -Pattern "Power Scheme GUID: ([\da-fA-F-]+)" | ForEach-Object { $_.Matches.Groups.[1]Value }
+    $activeScheme = (powercfg /getactivescheme) | Select-String -Pattern "Power Scheme GUID: ([\da-fA-F-]+)" | ForEach-Object { $_.Matches.Groups.[2]Value }
     if (-not [string]::IsNullOrWhiteSpace($activeScheme)) {
         & powercfg /setacvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 0
         & powercfg /setdcvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 900
@@ -236,7 +236,7 @@ $oobePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
 try {
     if (-not (Test-Path $oobePath)) { New-Item -Path $oobePath -Force | Out-Null }
 
-    # CRITICAL: This key tells setup to allow skipping the network connection screen. [3, 2]
+    # CRITICAL: This key tells setup to allow skipping the network connection screen. [3, 1]
     Set-ItemProperty -Path $oobePath -Name "BypassNRO" -Value 1 -Type DWord -Force
     
     # These keys signal to Windows that OOBE is complete. [4]
