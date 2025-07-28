@@ -314,7 +314,7 @@ function Start-CompleteSetup {
         $reboot = Read-Host "Reboot now to finalize all changes? (Y/N)"
         if ($reboot -eq "Y" -or $reboot -eq "y") {
             Write-Host "Rebooting in 10 seconds..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 10
+            Start-Sleep -Seconds 60
             Restart-Computer -Force
         }
     }
