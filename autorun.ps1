@@ -22,11 +22,50 @@ try {
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
 } catch {
     Write-Error "Failed to set execution policy: $($_.Exception.Message)"
-    # Consider exiting here if execution policy is critical for subsequent steps
 }
 #endregion
 
-#region 2. Create Local Admin User (User Input) and Prompt for Password
+#region 2. Bypass Hardware Requirements (LabConfig) - Move to beginning
+Write-Host "Applying registry keys to bypass Windows 11 hardware requirements (if applicable)..."
+$labConfigPath = "HKLM:\SYSTEM\Setup\LabConfig"
+try {
+    if (-not (Test-Path $labConfigPath)) { New-Item -Path $labConfigPath -ItemType Directory -Force | Out-Null }
+
+    # Ensure these are DWord values
+    Set-ItemProperty -Path $labConfigPath -Name "BypassTPMCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $labConfigPath -Name "BypassSecureBootCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $labConfigPath -Name "BypassCPUCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $labConfigPath -Name "BypassRAMCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $labConfigPath -Name "BypassStorageCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $labConfigPath -Name "BypassDiskCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    
+    Write-Host "Hardware requirement bypass keys applied (if needed)."
+} catch {
+    Write-Error "Failed to set hardware bypass registry keys: $($_.Exception.Message)"
+}
+#endregion
+
+#region 3. Apply OOBE Bypass Registry Keys FIRST
+Write-Host "Applying OOBE bypass registry keys..."
+$oobeMainPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
+$oobeSetupPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE"
+
+try {
+    # Ensure both OOBE registry paths exist
+    if (-not (Test-Path $oobeMainPath)) { New-Item -Path $oobeMainPath -ItemType Directory -Force | Out-Null }
+    if (-not (Test-Path $oobeSetupPath)) { New-Item -Path $oobeSetupPath -ItemType Directory -Force | Out-Null }
+
+    # Core OOBE bypass keys
+    Set-ItemProperty -Path $oobeMainPath -Name "BypassNRO" -Value 1 -Type DWord -Force -ErrorAction Stop
+    Set-ItemProperty -Path $oobeSetupPath -Name "SetupDisplayed" -Value 1 -Type DWord -Force -ErrorAction Stop
+    
+    Write-Host "OOBE bypass registry keys set successfully."
+} catch {
+    Write-Error "Failed to set OOBE bypass registry keys: $($_.Exception.Message)"
+}
+#endregion
+
+#region 4. Create Local Admin User (User Input) and Prompt for Password
 Write-Host "Setting up local administrator user."
 
 # Get Username from user input
@@ -55,7 +94,6 @@ while ($true) {
     $ConfirmPasswordSecure = Read-Host -AsSecureString "Please confirm the password for the user '$Username':"
 
     # Convert SecureString to plain string for comparison and unattend.xml.
-    # It's crucial not to store or log the plain text password long-term.
     $PasswordPlainForUnattend = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecure))
     $ConfirmPasswordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ConfirmPasswordSecure))
 
@@ -83,22 +121,20 @@ try {
     
     # Always ensure the user is in the Administrators group
     Write-Host "Adding user '$Username' to the Administrators group..."
-    Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction Stop
+    Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
     Write-Host "User '$Username' successfully added to Administrators group."
 
 } catch {
     Write-Error "Failed to manage user '$Username': $($_.Exception.Message)"
-    # Exit or handle error appropriately if user creation is critical
 }
 #endregion
 
-#region 3. Set Computer Name Automatically
+#region 5. Set Computer Name Automatically
 Write-Host "Setting the Computer Name automatically based on the user '$Username'..."
 # Automatically generate a computer name, e.g., NS-PC, ADMIN-PC
-# Ensure the username part is sanitized for a computer name (e.g., remove spaces or special chars if present)
-$SanitizedUsername = ($Username -replace '[^a-zA-Z0-9]', '').ToUpper() # Remove non-alphanumeric, convert to uppercase
+$SanitizedUsername = ($Username -replace '[^a-zA-Z0-9]', '').ToUpper()
 
-# Construct the computer name. You can adjust the suffix as desired.
+# Construct the computer name
 $ComputerName = "$SanitizedUsername-PC"
 
 # Ensure the computer name does not exceed the maximum length (15 characters for NetBIOS)
@@ -123,7 +159,95 @@ try {
 }
 #endregion
 
-#region 4. Install Software using Chocolatey
+#region 6. Generate and Place Unattend.xml for OOBE Bypass - CORRECTED
+Write-Host "Generating and placing unattend.xml for OOBE bypass..."
+
+# Define the path for the unattend.xml file - Use C:\Windows\System32\Sysprep\
+$UnattendFilePath = "C:\Windows\System32\Sysprep\unattend.xml"
+
+# CORRECTED XML content - proper structure for OOBE bypass
+$UnattendXmlContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Home</NetworkLocation>
+                <SkipUserOOBE>true</SkipUserOOBE>
+                <SkipMachineOOBE>true</SkipMachineOOBE>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+            </OOBE>
+            <UserAccounts>
+                <LocalAccounts>
+                    <LocalAccount wcm:action="add">
+                        <DisplayName>$Username</DisplayName>
+                        <Group>Administrators</Group>
+                        <Name>$Username</Name>
+                        <Password>
+                            <PlainText>true</PlainText>
+                            <Value>$PasswordPlainForUnattend</Value>
+                        </Password>
+                    </LocalAccount>
+                </LocalAccounts>
+            </UserAccounts>
+            <AutoLogon>
+                <Enabled>true</Enabled>
+                <LogonCount>1</LogonCount>
+                <Username>$Username</Username>
+                <Password>
+                    <PlainText>true</PlainText>
+                    <Value>$PasswordPlainForUnattend</Value>
+                </Password>
+            </AutoLogon>
+            <TimeZone>Eastern Standard Time</TimeZone>
+            <ComputerName>$ComputerName</ComputerName>
+        </component>
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>en-US</InputLocale>
+            <SystemLocale>en-US</SystemLocale>
+            <UILanguage>en-US</UILanguage>
+            <UILanguageFallback>en-US</UILanguageFallback>
+            <UserLocale>en-US</UserLocale>
+        </component>
+    </settings>
+    <settings pass="specialize">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <ComputerName>$ComputerName</ComputerName>
+        </component>
+    </settings>
+</unattend>
+"@
+
+try {
+    # Ensure the Sysprep directory exists
+    $SysprepDir = Split-Path $UnattendFilePath -Parent
+    if (-not (Test-Path $SysprepDir)) {
+        New-Item -Path $SysprepDir -ItemType Directory -Force | Out-Null
+    }
+
+    # Save the generated XML content to the file
+    $UnattendXmlContent | Out-File -FilePath $UnattendFilePath -Encoding utf8 -Force -ErrorAction Stop
+    Write-Host "Unattend.xml generated and placed at '$UnattendFilePath'."
+
+    # Also place a copy in Panther for redundancy
+    $PantherPath = "C:\Windows\Panther\unattend.xml"
+    $PantherDir = Split-Path $PantherPath -Parent
+    if (-not (Test-Path $PantherDir)) {
+        New-Item -Path $PantherDir -ItemType Directory -Force | Out-Null
+    }
+    $UnattendXmlContent | Out-File -FilePath $PantherPath -Encoding utf8 -Force -ErrorAction Stop
+    Write-Host "Unattend.xml also placed at '$PantherPath' for redundancy."
+
+} catch {
+    Write-Error "Failed to generate or place unattend.xml: $($_.Exception.Message)"
+}
+#endregion
+
+#region 7. Install Software using Chocolatey
 Write-Host "Starting software installations using Chocolatey..."
 
 function Install-ChocolateyPackage {
@@ -136,12 +260,12 @@ function Install-ChocolateyPackage {
     try {
         if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
             Write-Warning "Chocolatey is not installed. Cannot install $PackageName."
-            return # Exit function if choco isn't present
+            return
         }
 
-        # Check if the package is already installed more robustly
+        # Check if the package is already installed
         $installedPackages = choco list --local-only --limit-output
-        if ($installedPackages -match "(?i)^$([regex]::Escape($PackageId))") { # Case-insensitive regex match
+        if ($installedPackages -match "(?i)^$([regex]::Escape($PackageId))") {
             Write-Warning "$PackageName is already installed."
         } else {
             Write-Host "Installing $PackageName..."
@@ -165,7 +289,7 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12;
         iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
         Write-Host "Chocolatey installed successfully."
-        Start-Sleep -Seconds 5 # Give Chocolatey a moment to initialize
+        Start-Sleep -Seconds 5
     } catch {
         Write-Error "Failed to install Chocolatey: $($_.Exception.Message)"
         Write-Warning "Software installations will be skipped."
@@ -185,43 +309,38 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
 }
 #endregion
 
-#region 5. Create First-Logon Script for User-Specific Settings
+#region 8. Create First-Logon Script for User-Specific Settings
 Write-Host "Creating first-logon script for user '$Username'..."
 $SetupDir = "C:\TempSetup"
 $FirstLogonScriptPath = Join-Path $SetupDir "FirstLogonSetup.ps1"
-# Get the actual user profile path for the '$Username' user
 $StartupFolderPath = Join-Path (Join-Path "C:\Users" $Username) "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 
 # Create directories if they don't exist
 try {
     New-Item -Path $SetupDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-    New-Item -Path $StartupFolderPath -ItemType Directory -Force -ErrorAction Stop | Out-Nulll
+    New-Item -Path $StartupFolderPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
 } catch {
     Write-Error "Failed to create necessary directories for first logon script: $($_.Exception.Message)"
-    # Consider exiting or skipping this section if directory creation fails
 }
 
-# Define the content for the first-logon script. This contains all HKCU changes.
-# Escaping dollar signs for variables that should be evaluated by the inner script
+# Define the content for the first-logon script
 $FirstLogonScriptContent = @"
 # This script runs on the new user's first login to apply personal settings.
-Start-Sleep -Seconds 5 # Give the desktop a moment to load
+Start-Sleep -Seconds 5
 
 # Set Dark Mode
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force -ErrorAction SilentlyContinue
 
 # Configure Snap Window settings
-# Note: These values might be different or change with newer Windows versions.
 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "DisableSnapAssist" -Value 1 -Force -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapOverlay" -Value 0 -Force -ErrorAction SilentlyContinue
 
 # Move Taskbar to Left, Disable Task View, Widgets, and Hide Search Bar
-# These are Windows 11 specific settings and might require further research for exact values and paths
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction SilentlyContinue # Taskbar alignment (0=Left, 1=Center)
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force -ErrorAction SilentlyContinue
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction SilentlyContinue # Widgets button
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SearchboxTaskbarMode" -Value 0 -Force -ErrorAction SilentlyContinue # Search icon
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SearchboxTaskbarMode" -Value 0 -Force -ErrorAction SilentlyContinue
 
 # Enable Windows 10 Style Context Menu
 `$CLSIDPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
@@ -240,7 +359,7 @@ try {
     Write-Error "Failed to write first logon script content: $($_.Exception.Message)"
 }
 
-# Create a shortcut in the user's startup folder to run the script silently
+# Create a shortcut in the user's startup folder
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut((Join-Path $StartupFolderPath "ApplySettings.lnk"))
@@ -253,49 +372,26 @@ try {
 }
 #endregion
 
-#region 6. User Account Control (UAC) Configuration
-Write-Host "Configuring User Account Control (UAC) settings..."
-Write-Host "UAC settings are not modified by this script to maintain system security."
-# As noted in your original script, disabling UAC (EnableLUA = 0) is a significant security risk.
-# The script will continue to explicitly not modify UAC settings.
-# If you decide to modify UAC, uncomment and adjust the example code with caution.
-#
-# Example (to reduce prompts, but still keep UAC enabled - use with caution):
-# try {
-#     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 5 -Force -ErrorAction Stop
-#     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction Stop
-#     Write-Host "UAC prompt behavior adjusted to reduce prompts while keeping UAC enabled."
-# } catch {
-#     Write-Error "Failed to adjust UAC prompt behavior: $($_.Exception.Message)"
-# }
-#endregion
-
-#region 7. Remove Shortcut Overlay on Icons
+#region 9. Remove Shortcut Overlay on Icons
 Write-Host "Removing shortcut overlay on icons..."
 try {
     $ShellIconPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    if (-not (Test-Path $ShellIconPath)) { New-Item -Path $ShellIconPath -ItemType Directory -Force | Out-Null } # Ensure path is a directory
+    if (-not (Test-Path $ShellIconPath)) { New-Item -Path $ShellIconPath -ItemType Directory -Force | Out-Null }
     Set-ItemProperty -Path $ShellIconPath -Name "29" -Value "%windir%\System32\shell32.dll,-50" -Force -ErrorAction Stop
-    Write-Host "Shortcut overlay removal setting applied. Explorer restart needed for full effect."
+    Write-Host "Shortcut overlay removal setting applied."
 } catch {
     Write-Error "Failed to remove shortcut overlay: $($_.Exception.Message)"
 }
 #endregion
 
-#region 8. Configure Display Power Settings
+#region 10. Configure Display Power Settings
 Write-Host "Configuring Display Power Settings..."
 try {
-    # Using powercfg directly to get the active scheme GUID
-    # The output of 'powercfg /getactivescheme' is like:
-    # Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)
     $powerCfgOutput = powercfg /getactivescheme | Out-String
     $match = [regex]::Match($powerCfgOutput, 'Power Scheme GUID: ([\da-fA-F-]+)')
     $activeScheme = if ($match.Success) { $match.Groups[1].Value } else { $null }
 
     if (-not [string]::IsNullOrWhiteSpace($activeScheme)) {
-        # VIDEOIDLE refers to 'Turn off display after'
-        # Setting AC to 0 (Never)
-        # Setting DC to 900 seconds (15 minutes)
         & powercfg /setacvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 0
         & powercfg /setdcvalueindex $activeScheme SUB_MONITOR VIDEOIDLE 900
         & powercfg /setactive $activeScheme
@@ -308,147 +404,41 @@ try {
 }
 #endregion
 
-#region 9. Generate and Place Unattend.xml for OOBE Bypass
-Write-Host "Generating and placing unattend.xml for OOBE bypass..."
-
-# Define the path for the unattend.xml file
-# C:\Windows\Panther\ is a common location Windows Setup checks for unattend files
-$UnattendFilePath = "C:\Windows\Panther\unattend.xml"
-
-# Define the XML content for the unattend.xml file
-# This XML will use variables for dynamic content like Username, Password, and ComputerName
-# IMPORTANT: The password is in plain text here for automation.
-# For production, consider encrypting or using other secure deployment methods.
-$UnattendXmlContent = @"
-<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
-    <settings pass="oobeSystem">
-        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-            <OOBE>
-                <HideEULAPage>true</HideEULAPage>
-                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-                <NetworkLocation>Work</NetworkLocation>
-                <SkipUserOOBE>true</SkipUserOOBE>
-                <SkipMachineOOBE>true</SkipMachineOOBE>
-            </OOBE>
-            <UserAccounts>
-                <LocalAccounts>
-                    <LocalAccount wcm:action="add">
-                        <DisplayName>$Username Admin</DisplayName>
-                        <Group>Administrators</Group>
-                        <Name>$Username</Name>
-                        <Password>
-                            <PlainText>true</PlainText>
-                            <Value>$PasswordPlainForUnattend</Value>
-                        </Password>
-                    </LocalAccount>
-                </LocalAccounts>
-            </UserAccounts>
-            <TimeZone>Eastern Standard Time</TimeZone> <ComputerName>$ComputerName</ComputerName>
-        </component>
-        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-            <InputLocale>en-US</InputLocale>
-            <SystemLocale>en-US</SystemLocale>
-            <UILanguage>en-US</UILanguage>
-            <UILanguageFallback>en-US</UILanguageFallback>
-            <UserLocale>en-US</UserLocale>
-        </component>
-    </settings>
-</unattend>
-"@
-
+#region 11. Final OOBE Completion Registry Keys
+Write-Host "Setting final OOBE completion registry keys..."
 try {
-    # Ensure the Panther directory exists
-    $PantherDir = Split-Path $UnattendFilePath -Parent
-    if (-not (Test-Path $PantherDir)) {
-        New-Item -Path $PantherDir -ItemType Directory -Force | Out-Null
-    }
-
-    # Save the generated XML content to the file
-    $UnattendXmlContent | Out-File -FilePath $UnattendFilePath -Encoding utf8 -Force -ErrorAction Stop
-    Write-Host "Unattend.xml generated and placed at '$UnattendFilePath'."
-
-    # Clear the plain text password variable immediately after use in script's memory
-    $PasswordPlainForUnattend = $null
-
-} catch {
-    Write-Error "Failed to generate or place unattend.xml: $($_.Exception.Message)"
-}
-#endregion
-
-#region 9.1. Bypass Remaining OOBE Screens (Registry Flags - Supplemental)
-Write-Host "Applying supplemental registry keys for OOBE bypass..."
-# These registry keys act as a backup/supplement to the unattend.xml file.
-$oobeMainPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"
-$oobeSetupPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE" # Path for SetupDisplayed
-
-try {
-    # Ensure both OOBE registry paths exist
-    if (-not (Test-Path $oobeMainPath)) { New-Item -Path $oobeMainPath -ItemType Directory -Force | Out-Null }
-    if (-not (Test-Path $oobeSetupPath)) { New-Item -Path $oobeSetupPath -ItemType Directory -Force | Out-Null }
-
-    # Keys under HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE
-    Set-ItemProperty -Path $oobeMainPath -Name "BypassNRO" -Value 1 -Type DWord -Force -ErrorAction Stop # Bypass Network Requirement OOBE
-    Set-ItemProperty -Path $oobeMainPath -Name "OOBEComplete" -Value 1 -Type DWord -Force -ErrorAction Stop   # Signal OOBE is complete
-    Set-ItemProperty -Path $oobeMainPath -Name "UnattendDone" -Value 1 -Type DWord -Force -ErrorAction Stop   # Signal unattended setup is done
-    Set-ItemProperty -Path $oobeMainPath -Name "PrivacySettingsDone" -Value 1 -Type DWord -Force -ErrorAction Stop # Bypass Privacy Settings screen
-
-    # Key under HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE
-    Set-ItemProperty -Path $oobeSetupPath -Name "SetupDisplayed" -Value 1 -Type DWord -Force -ErrorAction Stop
+    # Mark OOBE as complete in multiple locations
+    Set-ItemProperty -Path $oobeMainPath -Name "OOBEComplete" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $oobeMainPath -Name "UnattendDone" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $oobeMainPath -Name "PrivacySettingsDone" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
     
-    Write-Host "Supplemental OOBE bypass registry keys set successfully."
-} catch {
-    Write-Error "Failed to set supplemental OOBE bypass registry keys: $($_.Exception.Message)"
-}
-#endregion
-
-#region 10. Bypass Hardware Requirements (LabConfig)
-Write-Host "Applying registry keys to bypass Windows 11 hardware requirements (if applicable)..."
-$labConfigPath = "HKLM:\SYSTEM\Setup\LabConfig"
-try {
-    if (-not (Test-Path $labConfigPath)) { New-Item -Path $labConfigPath -ItemType Directory -Force | Out-Null }
-
-    # Ensure these are DWord values
-    Set-ItemProperty -Path $labConfigPath -Name "BypassTPMCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $labConfigPath -Name "BypassSecureBootCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $labConfigPath -Name "BypassCPUCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $labConfigPath -Name "BypassRAMCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $labConfigPath -Name "BypassStorageCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $labConfigPath -Name "BypassDiskCheck" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    # Additional completion markers
+    $setupCompletePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State"
+    if (-not (Test-Path $setupCompletePath)) { New-Item -Path $setupCompletePath -ItemType Directory -Force | Out-Null }
+    Set-ItemProperty -Path $setupCompletePath -Name "ImageState" -Value "IMAGE_STATE_COMPLETE" -Type String -Force -ErrorAction SilentlyContinue
     
-    Write-Host "Hardware requirement bypass keys applied (if needed)."
+    Write-Host "Final OOBE completion registry keys set."
 } catch {
-    Write-Error "Failed to set hardware bypass registry keys: $($_.Exception.Message)"
+    Write-Error "Failed to set final OOBE completion keys: $($_.Exception.Message)"
 }
 #endregion
 
-#region 11. Cleanup
+#region 12. Cleanup
 Write-Host "Performing cleanup..."
 try {
-    # Remove temporary setup directory
-    if (Test-Path $SetupDir) {
-        Remove-Item -Path $SetupDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Removed temporary setup directory: $SetupDir"
-    }
-
-    # IMPORTANT: The unattend.xml is deliberately NOT removed here.
-    # It must remain in C:\Windows\Panther\ for Windows Setup to process it on the next boot.
-    # Windows Setup will typically remove it automatically after use.
-    Write-Host "Unattend.xml will remain in C:\Windows\Panther\ for Windows Setup to process after reboot."
-
+    # Clear the plain text password variable immediately
+    $PasswordPlainForUnattend = $null
+    
+    Write-Host "Cleanup completed."
 } catch {
-    Write-Error "Failed to clean up temporary directory: $($_.Exception.Message)"
+    Write-Error "Failed during cleanup: $($_.Exception.Message)"
 }
 #endregion
 
-#region 12. Auto Reboot
-Write-Host "Script execution complete. System will now restart to apply all changes."
-Start-Sleep -Seconds 5
-shutdown.exe /r /t 5 /f /c "System configuration complete. Rebooting to apply changes."
-#endregion
-
-#region 13. Stop Logging
+#region 13. Stop Logging and Reboot
 Stop-Transcript
-Write-Host "Script execution finished. Log saved to $LogFile"
+Write-Host "Script execution complete. System will now restart to apply all changes."
+Write-Host "After reboot, the system should bypass OOBE and go directly to the desktop."
+Start-Sleep -Seconds 5
+shutdown.exe /r /t 5 /f /c "OOBE bypass configuration complete. Rebooting to desktop."
 #endregion
