@@ -1,17 +1,18 @@
 #Requires -RunAsAdministrator
-param(
-    [string]$PPKGUrl
-)
 
 # Phase detection
 $phaseMarker = "HKLM:\SOFTWARE\PPKGSetup"
 $isPhase2 = Test-Path -Path $phaseMarker
 
 if (-not $isPhase2) {
-    # Phase 1: Apply PPKG and schedule Phase 2
-    # --------------------------------------------------
-    if (-not $PPKGUrl) {
-        $PPKGUrl = Read-Host -Prompt "Enter the URL for your .ppkg file"
+    # Phase 1: Get PPKG URL, apply package, and schedule Phase 2
+    # ------------------------------------------------------------
+    $PPKGUrl = Read-Host -Prompt "Enter the GitHub URL for your .ppkg file"
+    
+    # Validate URL format
+    if (-not ($PPKGUrl -like "http*://*.ppkg")) {
+        Write-Host "Invalid URL format. Please provide a valid direct download link to a .ppkg file." -ForegroundColor Red
+        exit 1
     }
 
     $tempDir = $env:TEMP
@@ -19,7 +20,7 @@ if (-not $isPhase2) {
 
     try {
         # Download PPKG
-        Write-Host "Downloading PPKG package..." -ForegroundColor Cyan
+        Write-Host "Downloading PPKG package from GitHub..." -ForegroundColor Cyan
         Invoke-WebRequest -Uri $PPKGUrl -OutFile $ppkgFile -UseBasicParsing
 
         # Apply PPKG
@@ -29,7 +30,7 @@ if (-not $isPhase2) {
         # Schedule Phase 2
         Write-Host "Scheduling post-reboot tasks..." -ForegroundColor Cyan
         $scriptPath = $MyInvocation.MyCommand.Path
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$scriptPath`" -PPKGUrl `"$PPKGUrl`""
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$scriptPath`""
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -41,7 +42,8 @@ if (-not $isPhase2) {
 
         # Reboot
         Write-Host "Rebooting system to complete setup..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 5
+        Write-Host "The system will reboot in 10 seconds..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
         Restart-Computer -Force
     }
     catch {
@@ -57,17 +59,17 @@ else {
         Unregister-ScheduledTask -TaskName "PPKGPhase2" -Confirm:$false -ErrorAction SilentlyContinue
 
         # Install Chocolatey
-        Write-Host "Installing Chocolatey..." -ForegroundColor Cyan
+        Write-Host "Installing Chocolatey package manager..." -ForegroundColor Cyan
         Set-ExecutionPolicy Bypass -Scope Process -Force
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
         Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        RefreshEnv
+        refreshenv
 
         # Install apps
         Write-Host "Installing applications..." -ForegroundColor Cyan
         $apps = @('7zip', 'googlechrome', 'everything', 'windirstat', 'notepadplusplus', 'vlc')
         foreach ($app in $apps) {
-            choco install $app -y --force | Out-Null
+            choco install $app -y --force
         }
 
         # Apply registry tweaks
@@ -133,8 +135,8 @@ else {
         # Cleanup
         Remove-Item -Path $phaseMarker -Recurse -Force
 
-        Write-Host "Setup completed successfully! Final reboot in 5 seconds..." -ForegroundColor Green
-        Start-Sleep -Seconds 5
+        Write-Host "Setup completed successfully! Final reboot in 10 seconds..." -ForegroundColor Green
+        Start-Sleep -Seconds 10
         Restart-Computer -Force
     }
     catch {
