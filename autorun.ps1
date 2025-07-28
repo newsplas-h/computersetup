@@ -116,8 +116,8 @@ try {
 }
 #endregion
 
-#region 4. User Account Creation (Interactive)
-Write-EnhancedLog "Starting user account creation..." "INFO"
+#region 4. Collect User Account Information for Unattend.xml
+Write-EnhancedLog "Collecting user information for unattend.xml..." "INFO"
 
 # Get Username
 $Username = ""
@@ -154,29 +154,14 @@ while ($true) {
     }
 }
 
-# Create user account
-try {
-    if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
-        New-LocalUser -Name $Username -Password $Password -FullName "$Username Admin" -Description "Local Administrator" -PasswordNeverExpires -ErrorAction Stop
-        Write-EnhancedLog "Created user: $Username" "SUCCESS"
-    } else {
-        Write-EnhancedLog "User $Username already exists" "INFO"
-    }
-    
-    Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
-    Write-EnhancedLog "Added $Username to Administrators group" "SUCCESS"
-} catch {
-    Write-EnhancedLog "Failed to create/configure user: $($_.Exception.Message)" "ERROR"
+$ComputerName = "$($Username.ToUpper())-PC"
+if ($ComputerName.Length -gt 15) {
+    $ComputerName = $ComputerName.Substring(0, 15)
 }
 #endregion
 
 #region 5. Multiple Unattend.xml Placement Strategy
 Write-EnhancedLog "Creating and placing unattend.xml files in multiple locations..." "INFO"
-
-$ComputerName = "$($Username.ToUpper())-PC"
-if ($ComputerName.Length -gt 15) {
-    $ComputerName = $ComputerName.Substring(0, 15)
-}
 
 # Simplified, more reliable unattend.xml
 $UnattendXmlContent = @"
@@ -238,7 +223,7 @@ foreach ($location in $unattendLocations) {
         
         $UnattendXmlContent | Out-File -FilePath $location -Encoding utf8 -Force
         
-        if (Test-Path $location) {
+        if (Test-Path $location)) {
             Write-EnhancedLog "✓ Placed unattend.xml at: $location" "SUCCESS"
             $placementSuccess++
         } else {
@@ -255,39 +240,7 @@ Write-EnhancedLog "Unattend.xml placement: $placementSuccess/$($unattendLocation
 $PasswordPlainForUnattend = $null
 #endregion
 
-#region 6. Alternative: Sysprep Generalize Method
-Write-EnhancedLog "Attempting sysprep-based OOBE completion..." "INFO"
-
-try {
-    # Create a temporary sysprep answer file for immediate OOBE completion
-    $sysprepAnswerFile = "C:\Windows\System32\Sysprep\sysprep_oobe.xml"
-    $sysprepContent = @"
-<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
-    <settings pass="generalize">
-        <component name="Microsoft-Windows-Security-SPP" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-            <SkipRearm>1</SkipRearm>
-        </component>
-    </settings>
-    <settings pass="oobeSystem">
-        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-            <OOBE>
-                <SkipMachineOOBE>true</SkipMachineOOBE>
-                <SkipUserOOBE>true</SkipUserOOBE>
-            </OOBE>
-        </component>
-    </settings>
-</unattend>
-"@
-    
-    $sysprepContent | Out-File -FilePath $sysprepAnswerFile -Encoding utf8 -Force
-    Write-EnhancedLog "Created sysprep answer file" "INFO"
-} catch {
-    Write-EnhancedLog "Failed to create sysprep answer file: $($_.Exception.Message)" "WARNING"
-}
-#endregion
-
-#region 7. Force Setup State Completion
+#region 6. Force Setup State Completion
 Write-EnhancedLog "Forcing Windows Setup state completion..." "INFO"
 
 try {
@@ -315,7 +268,7 @@ try {
 }
 #endregion
 
-#region 8. Install Essential Software
+#region 7. Install Essential Software
 Write-EnhancedLog "Installing essential software via Chocolatey..." "INFO"
 
 # Quick Chocolatey installation
@@ -336,7 +289,7 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 }
 
 # Install essential packages
-if (Get-Command choco -ErrorAction SilentlyContinue) {
+if (Get-Command choco -ErrorAction SilentlyContinue)) {
     $packages = @("googlechrome", "7zip", "notepadplusplus")
     foreach ($package in $packages) {
         try {
@@ -350,7 +303,7 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
 }
 #endregion
 
-#region 9. Final Verification and Logging
+#region 8. Final Verification and Logging
 Write-EnhancedLog "Performing final verification..." "INFO"
 
 # Verify critical registry keys
@@ -380,7 +333,7 @@ Write-EnhancedLog "Registry verification: $verificationSuccess/$($criticalKeys.C
 # Check for unattend.xml files
 $foundUnattendFiles = 0
 foreach ($location in $unattendLocations) {
-    if (Test-Path $location) {
+    if (Test-Path $location)) {
         $foundUnattendFiles++
         $fileSize = (Get-Item $location).Length
         Write-EnhancedLog "✓ Unattend.xml found: $location ($fileSize bytes)" "SUCCESS"
@@ -390,7 +343,7 @@ foreach ($location in $unattendLocations) {
 Write-EnhancedLog "Unattend.xml verification: $foundUnattendFiles/$($unattendLocations.Count) files present" "INFO"
 #endregion
 
-#region 10. Create Recovery Script
+#region 9. Create Recovery Script
 Write-EnhancedLog "Creating recovery script for troubleshooting..." "INFO"
 
 $recoveryScriptPath = "C:\Windows\Temp\OOBE_Recovery.ps1"
@@ -402,14 +355,14 @@ Write-Host "OOBE Recovery Script - Checking system state..." -ForegroundColor Ye
 `$oobeKeys = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" -ErrorAction SilentlyContinue
 if (`$oobeKeys) {
     Write-Host "Current OOBE registry state:"
-    `$oobeKeys.PSObject.Properties | Where-Object { `$_.Name -notlike "PS*" } | ForEach-Object {
+    `$oobeKeys.PSObject.Properties | Where-Object { `$_.Name -not like "PS*" } | ForEach-Object {
         Write-Host "  `$(`$_.Name): `$(`$_.Value)"
     }
 }
 
 # Check for unattend.xml processing errors
 `$setupLog = "C:\Windows\Panther\setupact.log"
-if (Test-Path `$setupLog) {
+if (Test-Path `$setupLog)) {
     Write-Host "`nChecking setup log for errors..."
     `$errors = Get-Content `$setupLog | Where-Object { `$_ -match "error|fail" -and `$_ -match "unattend|oobe" }
     if (`$errors) {
@@ -444,85 +397,23 @@ try {
 }
 #endregion
 
-#region 11. Alternative Restart Approach
-Write-EnhancedLog "Preparing for system restart with multiple restart methods..." "INFO"
-
-# Method 1: Standard shutdown command
-Write-EnhancedLog "Method 1: Standard restart scheduled in 10 seconds" "INFO"
-
-# Method 2: Create a startup script to continue bypass if needed
-$startupBypassPath = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\ContinueOOBEBypass.bat"
-$startupBypassContent = @"
-@echo off
-timeout /t 5
-reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f
-reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v OOBEComplete /t REG_DWORD /d 1 /f
-reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE" /v SetupDisplayed /t REG_DWORD /d 1 /f
-del "%~f0"
-"@
-
-try {
-    $startupDir = Split-Path $startupBypassPath -Parent
-    if (-not (Test-Path $startupDir)) {
-        New-Item -Path $startupDir -ItemType Directory -Force | Out-Null
-    }
-    $startupBypassContent | Out-File -FilePath $startupBypassPath -Encoding ascii -Force
-    Write-EnhancedLog "Startup bypass script created" "SUCCESS"
-} catch {
-    Write-EnhancedLog "Failed to create startup bypass script: $($_.Exception.Message)" "WARNING"
-}
-
-# Method 3: Registry-based restart with bypass enforcement
-try {
-    # Set a RunOnce key to ensure bypass is applied after restart
-    $runOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-    Set-ItemProperty -Path $runOncePath -Name "OOBEBypassEnforcer" -Value "cmd /c reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE`" /v BypassNRO /t REG_DWORD /d 1 /f" -Force
-    Write-EnhancedLog "RunOnce bypass enforcer set" "SUCCESS"
-} catch {
-    Write-EnhancedLog "Failed to set RunOnce enforcer: $($_.Exception.Message)" "WARNING"
-}
-#endregion
-
-#region 12. Final Summary and Instructions
-Write-EnhancedLog "=== SCRIPT EXECUTION SUMMARY ===" "INFO"
-Write-EnhancedLog "Registry operations: $successCount successful" "INFO"
-Write-EnhancedLog "Unattend.xml files: $placementSuccess placed" "INFO"
-Write-EnhancedLog "User account: $Username created and configured" "INFO"
-Write-EnhancedLog "Recovery script: Available at $recoveryScriptPath" "INFO"
-
-Write-Host "`n" -ForegroundColor Green
-Write-Host "=== IMPORTANT INSTRUCTIONS ===" -ForegroundColor Yellow
-Write-Host "1. System will restart in 10 seconds" -ForegroundColor White
-Write-Host "2. If OOBE still appears, press Shift+F10 and run:" -ForegroundColor White
-Write-Host "   powershell -File C:\Windows\Temp\OOBE_Recovery.ps1" -ForegroundColor Cyan
-Write-Host "3. Multiple bypass methods have been applied" -ForegroundColor White
-Write-Host "4. Check log file: $LogFile" -ForegroundColor White
-Write-Host "`n" -ForegroundColor Green
-
-# Give user a chance to abort
-Write-Host "Press Ctrl+C within 10 seconds to abort restart, or wait for automatic restart..." -ForegroundColor Yellow
-for ($i = 10; $i -gt 0; $i--) {
-    Write-Host "Restarting in $i seconds..." -ForegroundColor Red
-    Start-Sleep -Seconds 1
-}
-#endregion
-
-#region 13. Execute Restart
-Stop-Transcript
-
-Write-Host "Executing restart now..." -ForegroundColor Red
-
-# Try multiple restart methods for reliability
-try {
-    # Method 1: PowerShell restart
-    Restart-Computer -Force -ErrorAction Stop
-} catch {
+#region 10. Final Sysprep to Apply Unattend
+Write-EnhancedLog "Re-running OOBE with unattend.xml to skip setup..." "INFO"
+$unattendPath = "C:\Windows\System32\Sysprep\unattend.xml"
+if (Test-Path $unattendPath)) {
     try {
-        # Method 2: shutdown.exe
-        shutdown.exe /r /t 0 /f /c "OOBE bypass complete - restarting"
+        Write-EnhancedLog "Starting sysprep with OOBE reboot..." "INFO"
+        Start-Process -FilePath "$env:windir\System32\Sysprep\sysprep.exe" -ArgumentList "/oobe /reboot /quiet /unattend:$unattendPath" -Wait
+        Write-EnhancedLog "Sysprep started, system will reboot to apply settings." "SUCCESS"
     } catch {
-        # Method 3: wininit restart
-        wininit.exe
+        Write-EnhancedLog "Failed to start sysprep: $($_.Exception.Message)" "ERROR"
+        # Fall back to restart
+        Restart-Computer -Force
     }
+} else {
+    Write-EnhancedLog "Unattend.xml not found at $unattendPath, cannot run sysprep. Rebooting normally." "ERROR"
+    Restart-Computer -Force
 }
 #endregion
+
+Stop-Transcript
