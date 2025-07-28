@@ -1,84 +1,144 @@
-# Prompt user for the provisioning package URL
-$ppkgUrl = Read-Host "Enter the direct URL to your .ppkg provisioning package file"
+#Requires -RunAsAdministrator
+param(
+    [string]$PPKGUrl
+)
 
-# Define local path to save the provisioning package
-$localPath = "$env:SystemDrive\Temp\userpackage.ppkg"
+# Phase detection
+$phaseMarker = "HKLM:\SOFTWARE\PPKGSetup"
+$isPhase2 = Test-Path -Path $phaseMarker
 
-# Create Temp directory if it doesn't exist
-if (-not (Test-Path -Path "$env:SystemDrive\Temp")) {
-    New-Item -ItemType Directory -Path "$env:SystemDrive\Temp" | Out-Null
-}
-
-try {
-    Write-Host "Downloading provisioning package..."
-    Invoke-WebRequest -Uri $ppkgUrl -OutFile $localPath -UseBasicParsing
-
-    Write-Host "Installing provisioning package..."
-    # Install silently, force install and skip integrity check if needed
-    Install-ProvisioningPackage -PackagePath $localPath -ForceInstall -QuietInstall
-
-    Write-Host "Provisioning package installed successfully."
-
-    # Remove the provisioning package file after installation
-    Remove-Item -Path $localPath -Force
-
-    # Registry tweaks - Windows personalization and taskbar settings
-    Write-Host "Applying Windows personalization and taskbar registry tweaks..."
-
-    # Enable Dark mode (Apps and System)
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Type DWord -Value 0 -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Type DWord -Value 0 -ErrorAction SilentlyContinue
-
-    # Remove shortcut overlay icon on desktop shortcuts
-    # Remove registry key that shows shortcut overlay
-    $linkKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    if (-not (Test-Path $linkKey)) {
-        New-Item -Path $linkKey -Force | Out-Null
+if (-not $isPhase2) {
+    # Phase 1: Apply PPKG and schedule Phase 2
+    # --------------------------------------------------
+    if (-not $PPKGUrl) {
+        $PPKGUrl = Read-Host -Prompt "Enter the URL for your .ppkg file"
     }
-    Set-ItemProperty -Path $linkKey -Name "29" -Value "$null" -ErrorAction SilentlyContinue
-    # Setting the 29 value to empty disables shortcut overlay
 
-    # Disable snap suggestions and snap layouts on top drag
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SnapAssistFlyoutEnabled" -Type DWord -Value 0 -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "SnapAssist" -Type DWord -Value 0 -ErrorAction SilentlyContinue
+    $tempDir = $env:TEMP
+    $ppkgFile = Join-Path $tempDir "AutoSetup.ppkg"
 
-    # Move taskbar to left
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3" -Name "Settings" -Value (
-        # Retrieve current value
-        $bytes = (Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3").Settings
-        # Modify the 13th byte for taskbar location:
-        # 00 = left, 01 = top, 02 = right, 03 = bottom
-        $bytes[12] = 0x00
-        $bytes
-    ) -ErrorAction SilentlyContinue
+    try {
+        # Download PPKG
+        Write-Host "Downloading PPKG package..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $PPKGUrl -OutFile $ppkgFile -UseBasicParsing
 
-    # Disable Task View and Widgets buttons on taskbar
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Type DWord -Value 0 -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Type DWord -Value 0 -ErrorAction SilentlyContinue
+        # Apply PPKG
+        Write-Host "Applying provisioning package..." -ForegroundColor Cyan
+        Install-ProvisioningPackage -PackagePath $ppkgFile -ForceInstall -QuietInstall -ErrorAction Stop
 
-    # Hide Search bar on taskbar (set to 0 hides)
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Type DWord -Value 0 -ErrorAction SilentlyContinue
+        # Schedule Phase 2
+        Write-Host "Scheduling post-reboot tasks..." -ForegroundColor Cyan
+        $scriptPath = $MyInvocation.MyCommand.Path
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$scriptPath`" -PPKGUrl `"$PPKGUrl`""
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+        Register-ScheduledTask -TaskName "PPKGPhase2" -InputObject $task -ErrorAction Stop | Out-Null
 
-    # Enable Windows 10 style classic context menu (disable Windows 11 new menu)
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" -Name "(Default)" -Value "" -ErrorAction SilentlyContinue
+        # Create phase marker
+        New-Item -Path $phaseMarker -Force | Out-Null
 
-    Write-Host "Registry tweaks applied."
+        # Reboot
+        Write-Host "Rebooting system to complete setup..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 5
+        Restart-Computer -Force
+    }
+    catch {
+        Write-Host "Error in Phase 1: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+else {
+    # Phase 2: Install software and apply registry tweaks
+    # --------------------------------------------------
+    try {
+        # Remove scheduled task
+        Unregister-ScheduledTask -TaskName "PPKGPhase2" -Confirm:$false -ErrorAction SilentlyContinue
 
-    # Restart Explorer to apply some changes immediately
-    Write-Host "Restarting Windows Explorer to apply changes..."
-    Stop-Process -Name explorer -Force
-    Start-Process explorer.exe
+        # Install Chocolatey
+        Write-Host "Installing Chocolatey..." -ForegroundColor Cyan
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        RefreshEnv
 
-    # Install Chocolatey and programs
-    Write-Host "Installing Chocolatey package manager..."
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+        # Install apps
+        Write-Host "Installing applications..." -ForegroundColor Cyan
+        $apps = @('7zip', 'googlechrome', 'everything', 'windirstat', 'notepadplusplus', 'vlc')
+        foreach ($app in $apps) {
+            choco install $app -y --force | Out-Null
+        }
 
-    Write-Host "Installing software packages via Chocolatey..."
-    choco install -y 7zip googlechrome notepadplusplus vlc audacity shotcut
+        # Apply registry tweaks
+        Write-Host "Applying system tweaks..." -ForegroundColor Cyan
 
-    Write-Host "All tasks complete."
+        # Load default user hive
+        reg load "HKU\TempDefault" "C:\Users\Default\NTUSER.DAT" | Out-Null
 
-} catch {
-    Write-Host "An error occurred: $_" -ForegroundColor Red
+        # Dark Mode
+        $darkModeSettings = @{
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" = @{
+                "SystemUsesLightTheme" = 0
+                "AppsUseLightTheme"    = 0
+            }
+        }
+
+        # Explorer and Taskbar settings
+        $explorerSettings = @{
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" = @{
+                "TaskbarAl"                 = 0    # Taskbar left-aligned
+                "ShowTaskViewButton"        = 0    # Hide Task View
+                "TaskbarDa"                 = 0    # Hide Widgets
+                "EnableSnapAssistFlyout"    = 0    # Disable snap layouts
+            }
+            "HKCU:\Control Panel\Desktop" = @{
+                "WindowArrangementActive"   = 0    # Disable snap suggestions
+            }
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" = @{
+                "SearchboxTaskbarMode"      = 0    # Hide search bar
+            }
+            "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" = @{
+                "(Default)"                 = ""   # Classic context menu
+            }
+        }
+
+        # Apply settings to default user
+        foreach ($key in $darkModeSettings.Keys) {
+            $tempKey = $key.Replace("HKCU:", "HKEY_USERS\TempDefault")
+            foreach ($value in $darkModeSettings[$key].GetEnumerator()) {
+                reg add "$tempKey" /v $value.Name /t REG_DWORD /d $value.Value /f | Out-Null
+            }
+        }
+
+        foreach ($key in $explorerSettings.Keys) {
+            $tempKey = $key.Replace("HKCU:", "HKEY_USERS\TempDefault")
+            foreach ($value in $explorerSettings[$key].GetEnumerator()) {
+                $type = if ($value.Value -is [int]) { "REG_DWORD" } else { "REG_SZ" }
+                reg add "$tempKey" /v $value.Name /t $type /d $value.Value /f | Out-Null
+            }
+        }
+
+        # Unload default user hive
+        reg unload "HKU\TempDefault" | Out-Null
+
+        # Remove shortcut arrow (system-wide)
+        $explorerKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
+        $shellIcons = Join-Path $explorerKey "Shell Icons"
+        if (-not (Test-Path $shellIcons)) {
+            New-Item -Path $shellIcons -Force | Out-Null
+        }
+        Set-ItemProperty -Path $shellIcons -Name "29" -Value "" -Type String -Force
+
+        # Cleanup
+        Remove-Item -Path $phaseMarker -Recurse -Force
+
+        Write-Host "Setup completed successfully! Final reboot in 5 seconds..." -ForegroundColor Green
+        Start-Sleep -Seconds 5
+        Restart-Computer -Force
+    }
+    catch {
+        Write-Host "Error in Phase 2: $_" -ForegroundColor Red
+        exit 1
+    }
 }
