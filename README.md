@@ -8,7 +8,7 @@ Set up wifi network manually
 Shift + F10
 
 
-irm https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/autorun.ps1 | iex
+irm https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/init.ps1 | iex
 
 
 Follow prompts for password setup
