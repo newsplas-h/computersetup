@@ -1,22 +1,64 @@
 #Requires -RunAsAdministrator
-Start-Transcript -Path "$env:windir\Temp\ProvisioningSetup.log" -Append
+#Start-Transcript -Path "$env:windir\Temp\ProvisioningSetup.log" -Append
 
-# --- PHASE 1: SYSTEM CONTEXT ---
+Write-Host "Starting Complete Windows Setup..." -ForegroundColor Green
 
-# Create a directory for our post-setup scripts
-$SetupPath = "C:\TempSetup"
-New-Item -Path $SetupPath -ItemType Directory -Force | Out-Null
+# --- SYSTEM-WIDE CONFIGURATION ---
 
-# 1. Install Chocolatey
-Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
+Write-Host "Applying system-wide tweaks..." -ForegroundColor Cyan
+
+# Remove Shortcut Overlay (HKLM)
+$keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
+if (-not (Test-Path $keyPath)) {
+    New-Item -Path $keyPath -Force | Out-Null
+}
+Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type ExpandString -Force
+
+# --- USER-SPECIFIC CONFIGURATION ---
+
+Write-Host "Applying user-specific settings..." -ForegroundColor Cyan
+
+# 1. Set Dark Mode
+Write-Host "Setting Dark Mode..."
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+
+# 2. Snap Window Settings
+Write-Host "Configuring window snap settings..."
+Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "WindowArrangementActive" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
+
+# 3. Taskbar Configuration
+Write-Host "Configuring taskbar..."
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+
+# 4. Windows 10 Style Context Menu
+Write-Host "Setting Windows 10 style context menu..."
+$contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}"
+if (-not (Test-Path $contextMenuPath)) {
+    New-Item -Path $contextMenuPath -Force | Out-Null
+    New-Item -Path "$contextMenuPath\InprocServer32" -Force | Out-Null
+}
+Set-ItemProperty -Path "$contextMenuPath\InprocServer32" -Name "(Default)" -Value "" -Type String -Force
+
+# --- CHOCOLATEY AND APPLICATION INSTALLATION ---
+
+Write-Host "Installing Chocolatey..." -ForegroundColor Cyan
 Set-ExecutionPolicy Bypass -Scope Process -Force
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
-# Add choco to the path for this session
-$env:Path += ";$env:ProgramData\chocolatey\bin"
+try {
+    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+    # Add choco to the path for this session
+    $env:Path += ";$env:ProgramData\chocolatey\bin"
+    Write-Host "Chocolatey installed successfully." -ForegroundColor Green
+} catch {
+    Write-Host "Failed to install Chocolatey: $($_.Exception.Message)" -ForegroundColor Red
+}
 
-# 2. Install Applications via Chocolatey (for all users)
-Write-Host "Installing applications..." -ForegroundColor Cyan
+Write-Host "Installing applications via Chocolatey..." -ForegroundColor Cyan
 $apps = @(
     "googlechrome",
     "7zip",
@@ -27,71 +69,62 @@ $apps = @(
 )
 
 foreach ($app in $apps) {
-    Write-Host "Installing $app..."
-    # Use --params to ensure installation for all users where applicable
-    choco install $app -y --force --no-progress --params="'/AllUsers'"
+    Write-Host "Installing $app..." -ForegroundColor Yellow
+    try {
+        choco install $app -y --force --no-progress --params="'/AllUsers'"
+        Write-Host "$app installed successfully." -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to install $app: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
-# 3. System-Wide Tweaks (HKLM)
-Write-Host "Applying system-wide tweaks..." -ForegroundColor Cyan
-# Remove Shortcut Overlay (This is an HKLM key, so it's fine here)
-$keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-if (-not (Test-Path $keyPath)) {
-    New-Item -Path $keyPath -Force | Out-Null
-}
-# Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\system32\imageres.dll,-1015" -Type String
-# Note: A blank icon is often preferred to avoid a white square. Use an empty string for a transparent icon.
-Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type ExpandString -Force
+# --- RESTART EXPLORER ---
 
-# --- PREPARE FOR PHASE 2: USER CONTEXT ---
-
-Write-Host "Creating First Logon script..." -ForegroundColor Cyan
-
-# Create the user-context script that will run on first login
-$FirstLogonScript = @"
-#Requires -RunAsAdministrator
-Start-Transcript -Path "`$env:TEMP\PostLoginSetup.log" -Append
-
-# 1. Set Dark Mode
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-
-# 2. Snap Window Settings
-Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "WindowArrangementActive" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
-
-# 3. Taskbar Configuration
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
-
-# 4. Windows 10 Style Context Menu
-`$contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}"
-if (-not (Test-Path `$contextMenuPath)) {
-    New-Item -Path `$contextMenuPath -Force | Out-Null
-    New-Item -Path "`$contextMenuPath\InprocServer32" -Force | Out-Null
-}
-Set-ItemProperty -Path "`$contextMenuPath\InprocServer32" -Name "(Default)" -Value "" -Type String -Force
-
-# 5. Force Password Change on Next Logon
-`$currentUser = `$env:USERNAME
-net user `$currentUser /logonpasswordchg:yes
-
-# 6. Restart Explorer to apply UI changes
+Write-Host "Restarting Explorer to apply UI changes..." -ForegroundColor Cyan
 Stop-Process -Name explorer -Force
-# Explorer will restart automatically.
+Start-Sleep -Seconds 2
+# Explorer will restart automatically
 
-Stop-Transcript
-"@
+# --- PASSWORD CHANGE PROMPT ---
 
-# Save the script to the temp setup folder
-$FirstLogonScript | Out-File -FilePath "$SetupPath\FirstLogon.ps1" -Encoding utf8
+Write-Host "`n" -ForegroundColor Yellow
+Write-Host "================================" -ForegroundColor Yellow
+Write-Host "IMPORTANT: PASSWORD CHANGE" -ForegroundColor Yellow
+Write-Host "================================" -ForegroundColor Yellow
+Write-Host "Please change your password now for security." -ForegroundColor Yellow
+Write-Host "Press any key to open the password change dialog..." -ForegroundColor Yellow
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
-# Set up the RunOnce registry key to execute our script at logon
-$runOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-$command = "powershell.exe -ExecutionPolicy Bypass -File `"$SetupPath\FirstLogon.ps1`""
-Set-ItemProperty -Path $runOncePath -Name "CustomUserSetup" -Value $command -Type String -Force
+# Open the password change dialog
+Start-Process "netplwiz.exe"
 
-Write-Host "Provisioning complete. User-specific settings will be applied at first logon." -ForegroundColor Green
+Write-Host "`nAfter changing your password, press any key to continue..." -ForegroundColor Yellow
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+
+# --- REBOOT PROMPT ---
+
+Write-Host "`n" -ForegroundColor Green
+Write-Host "================================" -ForegroundColor Green
+Write-Host "SETUP COMPLETE!" -ForegroundColor Green
+Write-Host "================================" -ForegroundColor Green
+Write-Host "All configurations have been applied." -ForegroundColor Green
+Write-Host "A reboot is recommended to ensure all changes take effect." -ForegroundColor Green
+Write-Host "`n"
+
+do {
+    $rebootChoice = Read-Host "Would you like to reboot now? (Y/N)"
+    $rebootChoice = $rebootChoice.ToUpper()
+} while ($rebootChoice -ne "Y" -and $rebootChoice -ne "N")
+
+if ($rebootChoice -eq "Y") {
+    Write-Host "Rebooting in 10 seconds..." -ForegroundColor Yellow
+    Write-Host "Press Ctrl+C to cancel the reboot." -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
+    Stop-Transcript
+    Restart-Computer -Force
+} else {
+    Write-Host "Reboot skipped. Please reboot manually when convenient." -ForegroundColor Yellow
+    Write-Host "Setup log saved to: $env:windir\Temp\ProvisioningSetup.log" -ForegroundColor Cyan
+}
+
 Stop-Transcript
