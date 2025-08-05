@@ -158,6 +158,24 @@ Remove-Item "$env:LocalAppData\Microsoft\Windows\Explorer\iconcache*" -Force -Er
 # Start Explorer normally
 Start-Process explorer.exe
 
+# --- CLEANUP DEFAULT USER PROFILE ---
+Write-Host "Cleaning up default user profile..." -ForegroundColor Cyan
+$defaultUserPath = "C:\Users\DefaultUser0"
+if (Test-Path $defaultUserPath) {
+    try {
+        Write-Host "Removing DefaultUser0 profile..."
+        Remove-Item -Path $defaultUserPath -Recurse -Force -ErrorAction Stop
+        Write-Host "DefaultUser0 profile removed successfully" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Failed to remove DefaultUser0 profile: $_" -ForegroundColor Red
+        Write-Host "This is usually safe to ignore if Windows is still using it" -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "DefaultUser0 profile not found - skipping removal" -ForegroundColor Green
+}
+
 # --- COMPLETION NOTICE ---
 Write-Host "Creating completion notice..." -ForegroundColor Cyan
 
