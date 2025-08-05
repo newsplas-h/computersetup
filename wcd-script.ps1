@@ -12,7 +12,7 @@ $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons
 if (-not (Test-Path $keyPath)) {
     New-Item -Path $keyPath -Force | Out-Null
 }
-Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type ExpandString -Force
+Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
 
 # --- USER-SPECIFIC CONFIGURATION ---
 
