@@ -1,5 +1,5 @@
 #Requires -RunAsAdministrator
-#Start-Transcript -Path "$env:windir\Temp\ProvisioningSetup.log" -Append
+Start-Transcript -Path "$env:windir\Temp\ProvisioningSetup.log" -Append
 
 Write-Host "Starting Complete Windows Setup..." -ForegroundColor Green
 
@@ -8,11 +8,21 @@ Write-Host "Starting Complete Windows Setup..." -ForegroundColor Green
 Write-Host "Applying system-wide tweaks..." -ForegroundColor Cyan
 
 # Remove Shortcut Overlay (HKLM)
+Write-Host "Removing shortcut overlay arrows..."
 $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
 if (-not (Test-Path $keyPath)) {
     New-Item -Path $keyPath -Force | Out-Null
 }
-Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
+Set-ItemProperty -Path $keyPath -Name "29" -Value "" -Type String -Force
+
+# Set Time Zone to Eastern Standard Time
+Write-Host "Setting time zone to Eastern Standard Time..."
+try {
+    Set-TimeZone -Id "Eastern Standard Time" -PassThru
+    Write-Host "Time zone set successfully." -ForegroundColor Green
+} catch {
+    Write-Host "Failed to set time zone: $($_.Exception.Message)" -ForegroundColor Red
+}
 
 # --- USER-SPECIFIC CONFIGURATION ---
 
@@ -34,6 +44,33 @@ Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+
+# Remove Chat (Teams) icon from taskbar
+Write-Host "Removing Chat icon from taskbar..."
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
+
+# Remove Microsoft Store from taskbar
+Write-Host "Removing Microsoft Store from taskbar..."
+$storePinPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
+if (Test-Path $storePinPath) {
+    Set-ItemProperty -Path $storePinPath -Name "NumPinnedApps" -Value 0 -Force
+}
+
+# Unpin Microsoft Edge from taskbar (this requires more complex handling)
+Write-Host "Removing Microsoft Edge from taskbar..."
+$edgeAppId = "MSEdge"
+$taskbarPinsPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
+try {
+    # This method works for some systems
+    $shell = New-Object -ComObject Shell.Application
+    $folder = $shell.NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}')
+    $item = $folder.Items() | Where-Object { $_.Name -like "*Edge*" }
+    if ($item) {
+        $item.InvokeVerb("Unpin from taskbar")
+    }
+} catch {
+    Write-Host "Alternative method for Edge removal..." -ForegroundColor Yellow
+}
 
 # 4. Windows 10 Style Context Menu
 Write-Host "Setting Windows 10 style context menu..."
@@ -76,6 +113,40 @@ foreach ($app in $apps) {
     } catch {
         Write-Host "Failed to install $app: $($_.Exception.Message)" -ForegroundColor Red
     }
+}
+
+# Pin Chrome to taskbar and position it first
+Write-Host "Pinning Chrome to taskbar..." -ForegroundColor Cyan
+try {
+    # Wait a moment for Chrome installation to complete
+    Start-Sleep -Seconds 3
+    
+    # Find Chrome executable
+    $chromePath = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+    if (-not (Test-Path $chromePath)) {
+        $chromePath = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+    }
+    
+    if (Test-Path $chromePath) {
+        # Pin Chrome to taskbar using COM object
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.NameSpace((Split-Path $chromePath))
+        $item = $folder.ParseName((Split-Path $chromePath -Leaf))
+        $item.InvokeVerb("Pin to taskbar")
+        Write-Host "Chrome pinned to taskbar successfully." -ForegroundColor Green
+        
+        # Additional method to ensure Chrome is positioned first
+        $taskbarLayout = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
+        if (Test-Path $taskbarLayout) {
+            # Reset taskbar layout to put Chrome first
+            Remove-ItemProperty -Path $taskbarLayout -Name "Favorites" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $taskbarLayout -Name "FavoritesResolve" -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Host "Chrome executable not found for pinning." -ForegroundColor Red
+    }
+} catch {
+    Write-Host "Failed to pin Chrome to taskbar: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 # --- RESTART EXPLORER ---
