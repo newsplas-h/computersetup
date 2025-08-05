@@ -1,28 +1,31 @@
 #Requires -RunAsAdministrator
 
 # --- PHASE 1: SYSTEM CONTEXT ---
-# 1. Install Chocolatey
+# 1. Install Chocolatey with non-interactive mode
 Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
 Set-ExecutionPolicy Bypass -Scope Process -Force
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
 Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
 $env:Path += ";$env:ProgramData\chocolatey\bin"
 
-# 2. Install Applications via Chocolatey
+# Enable non-interactive mode for Chocolatey
+$env:ChocolateyNonInteractive = 'true'
+
+# 2. Install Applications via Chocolatey (including Firefox)
 Write-Host "Installing applications..." -ForegroundColor Cyan
 $apps = @(
     "googlechrome",
+    "firefox",          # Added Firefox
     "7zip",
     "windirstat",
     "everything",
     "notepadplusplus",
-    "vlc",
-    "winaerotweaker"
+    "vlc"
 )
 
 foreach ($app in $apps) {
     Write-Host "Installing $app..."
-    choco install $app -y --force --no-progress
+    choco install $app -y --force --no-progress --ignore-checksums
 }
 
 # 3. Remove Shortcut Arrow (Transparent Method)
@@ -70,6 +73,8 @@ Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
 # Remove Chat icon
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
+# Remove Widgets icon
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
 
 # 4. Classic Context Menu
 $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
@@ -152,3 +157,20 @@ Remove-Item "$env:LocalAppData\Microsoft\Windows\Explorer\iconcache*" -Force -Er
 
 # Start Explorer normally
 Start-Process explorer.exe
+
+# --- COMPLETION NOTICE ---
+Write-Host "Creating completion notice..." -ForegroundColor Cyan
+
+# Create desktop notice
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
+@"
+Setup complete!
+
+Change the user password, and pin your browser of choice and Explorer to the taskbar.
+"@ | Out-File -FilePath $noticePath -Encoding ASCII
+
+# Open the notice
+Start-Process notepad.exe $noticePath
+
+Write-Host "Script completed successfully!" -ForegroundColor Green
