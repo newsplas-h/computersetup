@@ -5,11 +5,10 @@
 Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
 Set-ExecutionPolicy Bypass -Scope Process -Force
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
-# Add choco to the path for this session
+Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
 $env:Path += ";$env:ProgramData\chocolatey\bin"
 
-# 2. Install Applications via Chocolatey (for all users)
+# 2. Install Applications via Chocolatey
 Write-Host "Installing applications..." -ForegroundColor Cyan
 $apps = @(
     "googlechrome",
@@ -22,50 +21,62 @@ $apps = @(
 
 foreach ($app in $apps) {
     Write-Host "Installing $app..."
-    # Use --params to ensure installation for all users where applicable
-    choco install $app -y --force --no-progress --params="'/AllUsers'"
+    choco install $app -y --force --no-progress
 }
 
 # 3. System-Wide Tweaks (HKLM)
 Write-Host "Applying system-wide tweaks..." -ForegroundColor Cyan
-# Remove Shortcut Overlay (This is an HKLM key, so it's fine here)
+# Remove Shortcut Overlay
 $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
 if (-not (Test-Path $keyPath)) {
     New-Item -Path $keyPath -Force | Out-Null
 }
-# Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\system32\imageres.dll,-1015" -Type String
-# Note: A blank icon is often preferred to avoid a white square. Use an empty string for a transparent icon.
-Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
+Set-ItemProperty -Path $keyPath -Name "29" -Value $null -Force
 
-# --- PREPARE FOR PHASE 2: USER CONTEXT ---
+# 4. Configure Power Settings
+Write-Host "Configuring power timeouts..." -ForegroundColor Cyan
+# Get active power plan GUID
+$activePlan = powercfg -getactivescheme
+if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
+    $guid = $matches[1]
+    
+    # DC (Plugged in) - Unlimited timeout
+    powercfg /setacvalueindex $guid SUB_VIDEO VIDEOIDLE 0
+    powercfg /setacvalueindex $guid SUB_SLEEP STANDBYIDLE 0
+    
+    # Battery - 15 minute timeout
+    powercfg /setdcvalueindex $guid SUB_VIDEO VIDEOIDLE 900
+    powercfg /setdcvalueindex $guid SUB_SLEEP STANDBYIDLE 900
+    
+    # Apply changes
+    powercfg /setactive $guid
+    Write-Host "Power settings updated: DC=Unlimited, Battery=15 min" -ForegroundColor Green
+} else {
+    Write-Host "! Failed to detect active power plan" -ForegroundColor Red
+}
+
+# --- USER CONTEXT SETTINGS ---
+Write-Host "Applying user preferences..." -ForegroundColor Cyan
 
 # 1. Set Dark Mode
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
 
-# 2. Snap Window Settings
-Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "WindowArrangementActive" -Value 0 -Force
+# 2. Disable Snap Assist
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
 
 # 3. Taskbar Configuration
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
 
-# 4. Windows 10 Style Context Menu
-`$contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}"
-if (-not (Test-Path `$contextMenuPath)) {
-    New-Item -Path `$contextMenuPath -Force | Out-Null
-    New-Item -Path "`$contextMenuPath\InprocServer32" -Force | Out-Null
+# 4. Classic Context Menu
+$contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+if (-not (Test-Path $contextMenuPath)) {
+    New-Item -Path $contextMenuPath -Force | Out-Null
 }
-Set-ItemProperty -Path "`$contextMenuPath\InprocServer32" -Name "(Default)" -Value "" -Type String -Force
+Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
 
-# 5. Force Password Change on Next Logon
-`$currentUser = `$env:USERNAME
-net user `$currentUser /logonpasswordchg:yes
-
-# 6. Restart Explorer to apply UI changes
-Stop-Process -Name explorer -Force
-# Explorer will restart automatically.
-Stop-Transcript
+# 5. Restart Explorer to apply changes
+Write-Host "Restarting Explorer to apply changes..." -ForegroundColor Cyan
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
