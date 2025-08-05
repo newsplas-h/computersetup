@@ -1,12 +1,6 @@
 #Requires -RunAsAdministrator
-Start-Transcript -Path "$env:windir\Temp\ProvisioningSetup.log" -Append
 
 # --- PHASE 1: SYSTEM CONTEXT ---
-
-# Create a directory for our post-setup scripts
-$SetupPath = "C:\TempSetup"
-New-Item -Path $SetupPath -ItemType Directory -Force | Out-Null
-
 # 1. Install Chocolatey
 Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
 Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -45,13 +39,6 @@ Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32
 
 # --- PREPARE FOR PHASE 2: USER CONTEXT ---
 
-Write-Host "Creating First Logon script..." -ForegroundColor Cyan
-
-# Create the user-context script that will run on first login
-#$FirstLogonScript = @"
-#Requires -RunAsAdministrator
-Start-Transcript -Path "`$env:TEMP\PostLoginSetup.log" -Append
-
 # 1. Set Dark Mode
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
@@ -81,17 +68,4 @@ net user `$currentUser /logonpasswordchg:yes
 # 6. Restart Explorer to apply UI changes
 Stop-Process -Name explorer -Force
 # Explorer will restart automatically.
-
-Stop-Transcript
-"@
-
-# Save the script to the temp setup folder
-#$FirstLogonScript | Out-File -FilePath "$SetupPath\FirstLogon.ps1" -Encoding utf8
-
-# Set up the RunOnce registry key to execute our script at logon
-#$runOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-#$command = "powershell.exe -ExecutionPolicy Bypass -File `"$SetupPath\FirstLogon.ps1`""
-#Set-ItemProperty -Path $runOncePath -Name "CustomUserSetup" -Value $command -Type String -Force
-
-Write-Host "Provisioning complete. User-specific settings will be applied at first logon." -ForegroundColor Green
 Stop-Transcript
