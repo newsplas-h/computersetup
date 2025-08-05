@@ -69,6 +69,8 @@ Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+# Remove Chat icon
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
 
 # 4. Classic Context Menu
 $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
@@ -77,6 +79,66 @@ if (-not (Test-Path $contextMenuPath)) {
 }
 Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
 
-# 5. Restart Explorer to apply changes
+# 5. Taskbar Pinning Configuration
+Write-Host "Configuring taskbar pins..." -ForegroundColor Cyan
+
+# Function to modify taskbar pins
+function Set-TaskbarPins {
+    param(
+        [string]$Action,
+        [string]$AppName,
+        [string]$AppPath
+    )
+    
+    $keyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
+    if (-not (Test-Path $keyPath)) {
+        New-Item -Path $keyPath -Force | Out-Null
+    }
+    
+    # Get current pins
+    $pins = (Get-ItemProperty -Path $keyPath -Name "Favorites" -ErrorAction SilentlyContinue).Favorites
+    $newPins = @()
+    
+    if ($pins) {
+        # Parse existing pins
+        $currentPins = [System.Text.Encoding]::Unicode.GetString($pins) -split '\0' | Where-Object { $_ }
+        
+        # Process based on action
+        foreach ($pin in $currentPins) {
+            if ($Action -eq "Unpin" -and $pin -match $AppName) {
+                Write-Host "Unpinning $AppName"
+                continue
+            }
+            $newPins += $pin
+        }
+    }
+    
+    # Add new pin if pinning
+    if ($Action -eq "Pin" -and $AppPath) {
+        Write-Host "Pinning $AppName to front"
+        $newPins = @($AppPath) + $newPins
+    }
+    
+    # Convert back to binary format
+    $newData = $newPins -join "`0" + "`0`0"
+    $binData = [System.Text.Encoding]::Unicode.GetBytes($newData)
+    
+    # Save to registry
+    Set-ItemProperty -Path $keyPath -Name "Favorites" -Value $binData -Type Binary -Force
+}
+
+# Unpin Microsoft Edge and Store
+Set-TaskbarPins -Action "Unpin" -AppName "Microsoft Edge"
+Set-TaskbarPins -Action "Unpin" -AppName "Microsoft Store"
+
+# Pin Chrome to front
+$chromePath = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+if (Test-Path $chromePath) {
+    Set-TaskbarPins -Action "Pin" -AppName "Google Chrome" -AppPath $chromePath
+} else {
+    Write-Host "Chrome not found at $chromePath" -ForegroundColor Yellow
+}
+
+# 6. Restart Explorer to apply changes
 Write-Host "Restarting Explorer to apply changes..." -ForegroundColor Cyan
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
