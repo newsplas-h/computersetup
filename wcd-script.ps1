@@ -16,7 +16,8 @@ $apps = @(
     "windirstat",
     "everything",
     "notepadplusplus",
-    "vlc"
+    "vlc",
+    "winaerotweaker"
 )
 
 foreach ($app in $apps) {
@@ -24,18 +25,16 @@ foreach ($app in $apps) {
     choco install $app -y --force --no-progress
 }
 
-# 3. System-Wide Tweaks (HKLM)
-Write-Host "Applying system-wide tweaks..." -ForegroundColor Cyan
-# Remove Shortcut Overlay
+# 3. Remove Shortcut Arrow (Transparent Method)
+Write-Host "Removing shortcut arrows..." -ForegroundColor Cyan
 $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
 if (-not (Test-Path $keyPath)) {
     New-Item -Path $keyPath -Force | Out-Null
 }
-Set-ItemProperty -Path $keyPath -Name "29" -Value $null -Force
+Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
 
 # 4. Configure Power Settings
 Write-Host "Configuring power timeouts..." -ForegroundColor Cyan
-# Get active power plan GUID
 $activePlan = powercfg -getactivescheme
 if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
     $guid = $matches[1]
@@ -139,6 +138,17 @@ if (Test-Path $chromePath) {
     Write-Host "Chrome not found at $chromePath" -ForegroundColor Yellow
 }
 
-# 6. Restart Explorer to apply changes
+# 6. Restart Explorer to apply changes and rebuild icon cache
 Write-Host "Restarting Explorer to apply changes..." -ForegroundColor Cyan
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+# Short delay to ensure Explorer fully shuts down
+Start-Sleep -Seconds 2
+
+# Rebuild icon cache (required for shortcut arrow change)
+Write-Host "Rebuilding icon cache..." -ForegroundColor Cyan
+Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:LocalAppData\Microsoft\Windows\Explorer\iconcache*" -Force -ErrorAction SilentlyContinue
+
+# Start Explorer normally
+Start-Process explorer.exe
