@@ -160,7 +160,7 @@ Start-Process explorer.exe
 
 # --- CLEANUP DEFAULT USER PROFILE ---
 Write-Host "Cleaning up default user profile..." -ForegroundColor Cyan
-$defaultUserPath = "C:\Users\DefaultUser0"
+$defaultUserPath = "C:\Users\defaultuser0"
 if (Test-Path $defaultUserPath) {
     try {
         Write-Host "Removing DefaultUser0 profile..."
