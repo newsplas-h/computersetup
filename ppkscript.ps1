@@ -1,34 +1,38 @@
-powershell.exe -Command {
-    # Set paths
-    $log = 'C:\Windows\Temp\ProvisioningLog.txt'
-    $url = 'https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/newscript.ps1'
-    $target = "$env:TEMP\newscript.ps1"
+# Save as provision.ps1
+$logPath = 'C:\ProvisionLog.txt'
+$scriptPath = 'C:\Script.ps1'
+$githubUrl = 'https://raw.githubusercontent.com/newsplas-h/computersetup/main/newscript.ps1'
+
+"Provisioning started at $(Get-Date)" | Out-File $logPath
+
+try {
+    # Download script
+    "Downloading script from GitHub..." | Out-File $logPath -Append
+    (New-Object System.Net.WebClient).DownloadFile($githubUrl, $scriptPath)
     
-    # Basic logging function
-    function Log($msg) {
-        "$(Get-Date -Format 'HH:mm:ss') - $msg" | Out-File $log -Append
+    # Verify download
+    if (-not (Test-Path $scriptPath)) {
+        throw "Download failed - file not found"
     }
+    "Download completed to $scriptPath" | Out-File $logPath -Append
+
+    # Execute with admin privileges
+    "Launching script with elevated privileges..." | Out-File $logPath -Append
+    $process = Start-Process `
+        -FilePath powershell.exe `
+        -ArgumentList "-ExecutionPolicy Bypass -File `"$scriptPath`"" `
+        -Verb RunAs `
+        -PassThru `
+        -Wait
     
-    # Start log
-    "==== PROVISIONING STARTED ====" | Out-File $log
-    Log "Using target path: $target"
-    
-    try {
-        # Download file
-        Log "Downloading script from GitHub"
-        (New-Object System.Net.WebClient).DownloadFile($url, $target)
-        Log "Download completed"
-        
-        # Run script as admin
-        Log "Starting main script with admin rights"
-        Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$target`"" -Verb RunAs -Wait
-        Log "Main script completed"
-    }
-    catch {
-        Log "ERROR: $($_.Exception.Message)"
-        exit 1
-    }
-    finally {
-        Log "==== PROVISIONING FINISHED ===="
-    }
+    "Script completed with exit code: $($process.ExitCode)" | Out-File $logPath -Append
+    exit $process.ExitCode
+}
+catch {
+    $errorMsg = $_.Exception.Message
+    "ERROR: $errorMsg" | Out-File $logPath -Append
+    exit 1
+}
+finally {
+    "Provisioning finished at $(Get-Date)" | Out-File $logPath -Append
 }
