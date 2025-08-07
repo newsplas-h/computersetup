@@ -1,4 +1,4 @@
-# --- PHASE 1: SYSTEM-WIDE PREFERENCES ---
+# --- SYSTEM-WIDE PREFERENCES & APP INSTALLATION ---
 Write-Host "Applying system-wide preferences..."
 # Remove Shortcut Arrow
 $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
@@ -16,7 +16,6 @@ if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9
     powercfg /setactive $guid
 }
 
-# --- PHASE 2: APPLICATION INSTALLATION ---
 Write-Host "Installing applications..."
 Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
@@ -36,7 +35,7 @@ if (Test-Path $defaultUserPath) {
     Remove-Item -Path $defaultUserPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# --- PHASE 3: HANDOFF TO USER SCRIPT ---
+# --- HANDOFF TO USER SCRIPT ---
 Write-Host "Creating temporary handoff task to run user setup..."
 try {
     # Find the active logged-on user
@@ -48,14 +47,11 @@ try {
         $userCommand = "Invoke-Expression (Invoke-RestMethod -Uri '$userScriptUrl')"
         $userAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -NoProfile -Command `"$userCommand`""
         
-        # Trigger this task to run 15 seconds from now. This gives this script time to finish.
+        # Trigger this task to run 15 seconds from now.
         $userTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(15)
         
-        # Register the task to run as the logged-in user
         Register-ScheduledTask -TaskName $userTaskName -Action $userAction -Trigger $userTrigger -User $currentUser -Force
         Write-Host "Successfully created handoff task for user: $currentUser"
-    } else {
-        Write-Warning "Could not find an active logged-in user to hand off to."
     }
 } catch {
     Write-Error "Handoff failed: $_"
@@ -64,4 +60,3 @@ try {
 # --- SELF-CLEANUP ---
 Write-Host "System setup complete. Cleaning up system task..."
 Unregister-ScheduledTask -TaskName "Run System Setup" -Confirm:$false -ErrorAction SilentlyContinue
-```powershell
