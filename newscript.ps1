@@ -30,7 +30,8 @@ function Start-SystemPhase {
     } catch { Write-Error "Failed to apply Default User settings: $_" }
     finally {
         Write-Host "Unloading Default User hive."
-        # !! FIX: Correctly call the external reg.exe program without PowerShell parameters !!
+        # !! FIX: Force garbage collection to release any lingering registry handles !!
+        [gc]::Collect()
         reg.exe unload HKLM\DefaultUser
     }
 
