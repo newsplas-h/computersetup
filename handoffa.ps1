@@ -24,7 +24,7 @@ try {
 
     if ($currentUser) {
         $userTaskName = "Run User Setup"
-        $userScriptUrl = "[https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/User-Setup.ps1](https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/User-Setup.ps1)" # <-- IMPORTANT: URL for Script #3
+        $userScriptUrl = "[https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/handoffb.ps1](https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/handoffb.ps1)" # <-- IMPORTANT: URL for Script #3
         $userCommand = "Invoke-Expression (Invoke-RestMethod -Uri '$userScriptUrl')"
         $userAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -NoProfile -Command `"$userCommand`""
         
