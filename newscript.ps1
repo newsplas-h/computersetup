@@ -56,14 +56,22 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try {
         Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
-        $env:Path += ";$env:ProgramData\chocolatey\bin"
-        $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
-        foreach ($app in $apps) {
+    } catch {
+        Write-Error "FATAL: Failed to install Chocolatey. Cannot continue with application installs."
+        # The script will continue to the cleanup phase from here.
+    }
+
+    $env:Path += ";$env:ProgramData\chocolatey\bin"
+    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    
+    # !! IMPROVEMENT: Added error handling for each app install !!
+    foreach ($app in $apps) {
+        try {
             Write-Host "Installing $app..."
             choco install $app -y --force --no-progress
+        } catch {
+            Write-Warning "Could not install '$app'. The script will continue with other applications. Error: $_"
         }
-    } catch {
-        Write-Error "An error occurred during application installation: $_"
     }
     
     # --- Phase 4: STAGE USER-CONTEXT SCRIPT ---
@@ -72,10 +80,8 @@ function Start-SystemPhase {
     if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
     $localScriptPath = Join-Path -Path $scriptDirectory -ChildPath "usersetup.ps1"
 
-    # Save the currently running script to a file so the RunOnce key can call it.
     $MyInvocation.MyCommand.Definition | Out-File $localScriptPath -Encoding utf8
 
-    # Create a RunOnce registry key to trigger the 'User' phase at the next logon.
     $runOnceKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
     $commandToRun = "powershell.exe -ExecutionPolicy Bypass -File `"$localScriptPath`" -Phase User"
     Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $commandToRun -Force
@@ -89,6 +95,10 @@ function Start-SystemPhase {
 
 # --- Function for User-Specific Operations ---
 function Start-UserPhase {
+    # !! IMPROVEMENT: Added dedicated logging for the User Phase !!
+    $userLogPath = "C:\Temp\UserSetupLog.txt"
+    Start-Transcript -Path $userLogPath -Force
+    
     Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
     
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
@@ -132,10 +142,10 @@ This setup script has now been removed.
 
     # --- Self-Cleanup (User Phase) ---
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
+    Stop-Transcript
 }
 
 # --- SCRIPT ENTRY POINT ---
-# This block routes execution to the correct function based on the -Phase parameter.
 try {
     if ($Phase -eq 'System') {
         Start-SystemPhase
@@ -147,4 +157,5 @@ try {
 catch {
     Write-Error "An unhandled error occurred in phase '$Phase': $_"
     "$(Get-Date): An unhandled error occurred in phase '$Phase': `n$_" | Out-File -FilePath "C:\Temp\SetupError.log" -Append
+    if (Get-Transcript) { Stop-Transcript }
 }
