@@ -27,60 +27,7 @@ if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9
     Write-Host "! Failed to detect active power plan" -ForegroundColor Red
 }
 
-# --- PHASE 2: DEFAULT USER PREFERENCES ---
-# These settings are applied to the Default User profile, so any new user gets them.
-Write-Host "Applying preferences to the Default User profile..." -ForegroundColor Cyan
-try {
-    # Load the Default User registry hive
-    reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
-
-    # Define the base path for the loaded hive
-    $defaultUserRegPath = "HKLM:\DefaultUser"
-
-    # Ensure required registry paths exist
-    $regPaths = @(
-        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Search",
-        "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-    )
-    
-    foreach ($path in $regPaths) {
-        if (-not (Test-Path $path)) {
-            New-Item -Path $path -Force | Out-Null
-        }
-    }
-
-    # 3. Set Dark Mode
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-
-    # 4. Disable Snap Assist
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
-
-    # 5. Taskbar Configuration
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force # Remove Chat icon
-    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force # Remove Widgets icon
-
-    # 6. Classic Context Menu
-    $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-    Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-
-    # 7. Unpin Default Taskbar Icons (Edge, Store) - Modified for Default User
-    Write-Host "Configuring default taskbar layout..."
-    # Remove default taskbar layout XML if it exists
-    $taskbarLayoutPath = "C:\Users\Default\AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml"
-    if (Test-Path $taskbarLayoutPath) {
-        Remove-Item -Path $taskbarLayoutPath -Force -ErrorAction SilentlyContinue
-    }
-
-    Write-Host "Default User preferences applied successfully." -ForegroundColor Green
-}
-catch {
-    Write-Error "Failed to apply Default User settings: $_"
+ "Failed to apply Default User settings: $_"
 }
 finally {
     # ALWAYS unload the hive, even if errors occurred.
