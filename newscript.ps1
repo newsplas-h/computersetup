@@ -8,8 +8,13 @@ param(
 
 # --- Function for System-Level Operations ---
 function Start-SystemPhase {
+    # !! IMMEDIATE ACTION: Delete the scheduled task that launched this script !!
+    # This prevents the System Phase from ever running more than once.
+    Write-Host "--- Deleting self-triggering scheduled task immediately ---" -ForegroundColor Cyan
+    Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction Continue
+    
+    # Now, proceed with the rest of the setup.
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
-    # (Power settings, shortcut arrow, default user profile settings... no changes here)
     $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
     if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
     Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
@@ -30,13 +35,11 @@ function Start-SystemPhase {
     } catch { Write-Error "Failed to apply Default User settings: $_" }
     finally {
         Write-Host "Unloading Default User hive."
-        # !! FIX: Force garbage collection to release any lingering registry handles !!
         [gc]::Collect()
         reg.exe unload HKLM\DefaultUser
     }
 
     Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
-    # (Chocolatey and app installs from prior versions are unchanged)
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
@@ -62,7 +65,6 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     $runOnceKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
     Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $localCmdScriptPath -Force
     Write-Host "User phase has been staged to run via batch file at the next logon." -ForegroundColor Green
-    Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
 
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
@@ -83,7 +85,6 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
 # --- Function for User-Specific Operations ---
 function Start-UserPhase {
     # --- IMMEDIATE SECURITY CLEANUP ---
-    # The very first action is to remove the auto-logon credentials from the registry.
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "0"
     Remove-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
@@ -91,7 +92,6 @@ function Start-UserPhase {
     $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
     Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
-    # (User preference settings from prior versions are unchanged)
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
