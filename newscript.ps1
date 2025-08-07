@@ -3,7 +3,7 @@
 # --- PHASE 1: SYSTEM CONTEXT ---
 # 1. Install Chocolatey with non-interactive mode
 Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
-Set-ExecutionPolicy Bypass -Scope Process -Force
+Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
 Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
 $env:Path += ";$env:ProgramData\chocolatey\bin"
