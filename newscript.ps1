@@ -27,48 +27,65 @@ if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9
     Write-Host "! Failed to detect active power plan" -ForegroundColor Red
 }
 
-# --- PHASE 2: USER-SPECIFIC PREFERENCES ---
-# IMPORTANT: These settings modify HKEY_CURRENT_USER (HKCU). They will only work
-# correctly when this script is run by the logged-in user. When run by the
-# SYSTEM account (like in the scheduled task), these changes will likely fail
-# or apply to the wrong user profile, which was the source of the original errors.
-Write-Host "Applying user-specific preferences..." -ForegroundColor Cyan
-
-# 3. Set Dark Mode
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-
-# 4. Disable Snap Assist
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
-
-# 5. Taskbar Configuration
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force # Remove Chat icon
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force # Remove Widgets icon
-
-# 6. Classic Context Menu
-$contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-if (-not (Test-Path $contextMenuPath)) {
-    New-Item -Path $contextMenuPath -Force | Out-Null
-}
-Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-
-# 7. Unpin Default Taskbar Icons
-Write-Host "Removing default taskbar pins..."
+# --- PHASE 2: DEFAULT USER PREFERENCES ---
+# These settings are applied to the Default User profile, so any new user gets them.
+Write-Host "Applying preferences to the Default User profile..." -ForegroundColor Cyan
 try {
-    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    Get-ChildItem -Path $taskbarPath -Filter "*.lnk" | ForEach-Object {
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($_.FullName)
-        if ($shortcut.TargetPath -like "*msedge.exe*" -or $shortcut.TargetPath -like "*ms-windows-store*") {
-            Write-Host "Unpinning default app: $($_.Name)"
-            Remove-Item -Path $_.FullName -Force
+    # Load the Default User registry hive
+    reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
+
+    # Define the base path for the loaded hive
+    $defaultUserRegPath = "HKLM:\DefaultUser"
+
+    # 3. Set Dark Mode
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+
+    # 4. Disable Snap Assist
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
+
+    # 5. Taskbar Configuration
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force # Remove Chat icon
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force # Remove Widgets icon
+
+    # 6. Classic Context Menu
+    $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+    if (-not (Test-Path $contextMenuPath)) {
+        New-Item -Path $contextMenuPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
+
+    # 7. Unpin Default Taskbar Icons (Edge, Store)
+    Write-Host "Removing default taskbar pins from Default User profile..."
+    $defaultTaskbarPath = "C:\Users\Default\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    if (Test-Path $defaultTaskbarPath) {
+        Get-ChildItem -Path $defaultTaskbarPath -Filter "*.lnk" | ForEach-Object {
+            try {
+                $shell = New-Object -ComObject WScript.Shell
+                $shortcut = $shell.CreateShortcut($_.FullName)
+                $targetPath = $shortcut.TargetPath
+                if ($targetPath -like "*msedge.exe*" -or $targetPath -like "*ms-windows-store*") {
+                    Write-Host "Unpinning default app: $($_.Name)"
+                    Remove-Item -Path $_.FullName -Force
+                }
+            } catch {
+                Write-Warning "Could not process shortcut: $($_.Name)."
+            }
         }
     }
-} catch {
-    Write-Warning "Could not unpin taskbar items. This is expected if run as SYSTEM."
+
+    Write-Host "Default User preferences applied successfully." -ForegroundColor Green
+}
+catch {
+    Write-Error "Failed to apply Default User settings: $_"
+}
+finally {
+    # ALWAYS unload the hive, even if errors occurred.
+    Write-Host "Unloading Default User hive."
+    reg unload HKLM\DefaultUser
 }
 
 # --- PHASE 3: APPLICATION INSTALLATION ---
@@ -89,7 +106,7 @@ foreach ($app in $apps) {
 }
 
 # --- PHASE 4: FINAL UI RESTART ---
-# Restart Explorer to apply all changes
+# Restart Explorer to apply all changes (shortcut arrows, taskbar, etc.)
 Write-Host "Restarting Explorer to apply all changes..."
 Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
@@ -124,4 +141,5 @@ Start-Process notepad.exe $noticePath
 Write-Host "Removing setup task..." -ForegroundColor Cyan
 Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
 Write-Host "Setup task removed." -ForegroundColor Green
+
 Write-Host "Script completed successfully!" -ForegroundColor Green
