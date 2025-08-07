@@ -1,5 +1,5 @@
 #Requires -RunAsAdministrator
-#test
+
 # --- PHASE 1: SYSTEM-WIDE PREFERENCES ---
 # These settings modify HKEY_LOCAL_MACHINE and apply to the whole system.
 Write-Host "Applying system-wide preferences..." -ForegroundColor Cyan
