@@ -28,7 +28,11 @@ function Start-SystemPhase {
         if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
         Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
     } catch { Write-Error "Failed to apply Default User settings: $_" }
-    finally { reg unload HKLM\DefaultUser -ErrorAction SilentlyContinue }
+    finally {
+        Write-Host "Unloading Default User hive."
+        # !! FIX: Correctly call the external reg.exe program without PowerShell parameters !!
+        reg.exe unload HKLM\DefaultUser
+    }
 
     Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
     # (Chocolatey and app installs from prior versions are unchanged)
