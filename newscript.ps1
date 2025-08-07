@@ -1,120 +1,210 @@
 #Requires -RunAsAdministrator
 
-# --- High-Level Invocation Log ---
-# This will log exactly how the script was called each time, for debugging.
+# --- PHASE 1: SYSTEM-WIDE PREFERENCES ---
+# These settings modify HKEY_LOCAL_MACHINE and apply to the whole system.
+Write-Host "Applying system-wide preferences..." -ForegroundColor Cyan
+
+# 1. Remove Shortcut Arrow (Transparent Method)
+Write-Host "Removing shortcut arrows..."
+$keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
+if (-not (Test-Path $keyPath)) {
+    New-Item -Path $keyPath -Force | Out-Null
+}
+Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
+
+# 2. Configure Power Settings
+Write-Host "Configuring power timeouts..."
+$activePlan = powercfg -getactivescheme
+if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
+    $guid = $matches[1]
+    powercfg /setacvalueindex $guid SUB_VIDEO VIDEOIDLE 0
+    powercfg /setacvalueindex $guid SUB_SLEEP STANDBYIDLE 0
+    powercfg /setdcvalueindex $guid SUB_VIDEO VIDEOIDLE 900
+    powercfg /setdcvalueindex $guid SUB_SLEEP STANDBYIDLE 900
+    powercfg /setactive $guid
+    Write-Host "Power settings updated." -ForegroundColor Green
+} else {
+    Write-Host "! Failed to detect active power plan" -ForegroundColor Red
+}
+
+# --- PHASE 2: DEFAULT USER PREFERENCES ---
+# These settings are applied to the Default User profile, so any new user gets them.
+Write-Host "Applying preferences to the Default User profile..." -ForegroundColor Cyan
 try {
-    $logEntry = "($(Get-Date)) - Invoked with command: $($MyInvocation.Line)"
-    Add-Content -Path "C:\Temp\InvocationLog.txt" -Value $logEntry
-} catch {}
+    # Load the Default User registry hive
+    reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
 
+    # Define the base path for the loaded hive
+    $defaultUserRegPath = "HKLM:\DefaultUser"
 
-# This parameter allows the script to be called in two different phases.
-param(
-    [ValidateSet('System', 'User')]
-    [string]$Phase = 'System'
-)
-
-# --- Function for System-Level Operations ---
-function Start-SystemPhase {
-    Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
-    # (Power settings, shortcut arrow, default user profile settings... no changes here)
-    # --- [Code from previous versions for Phases 1 & 2 is unchanged] ---
-    # 1. Remove Shortcut Arrow
-    $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
-    Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
-    # 2. Configure Power Settings
-    $activePlan = powercfg -getactivescheme
-    if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
-        $guid = $matches[1]
-        powercfg /setacvalueindex $guid SUB_VIDEO VIDEOIDLE 0; powercfg /setacvalueindex $guid SUB_SLEEP STANDBYIDLE 0
-        powercfg /setdcvalueindex $guid SUB_VIDEO VIDEOIDLE 900; powercfg /setdcvalueindex $guid SUB_SLEEP STANDBYIDLE 900
-        powercfg /setactive $guid
-    }
-    # 3. Apply settings to DEFAULT USER profile
-    try {
-        reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
-        $defaultUserRegPath = "HKLM:\DefaultUser"
-        Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-        $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-        if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
-        Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-    } catch { Write-Error "Failed to apply Default User settings: $_" }
-    finally { reg unload HKLM\DefaultUser -ErrorAction SilentlyContinue }
-
-    # --- Phase 3: APPLICATION INSTALLATION (SYSTEM ONLY) ---
-    Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
-    $env:Path += ";$env:ProgramData\chocolatey\bin"
-    #$apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
-    $apps = @("7zip", "windirstat")
-    foreach ($app in $apps) {
-        try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
-    }
+    # Ensure required registry paths exist
+    $regPaths = @(
+        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+        "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Search",
+        "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+    )
     
-    # --- Phase 4: STAGE USER-CONTEXT SCRIPT ---
-    Write-Host "--- Staging User-Specific Setup ---" -ForegroundColor Cyan
-    $scriptDirectory = "C:\Temp\Setup"
-    if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
-    $localScriptPath = Join-Path -Path $scriptDirectory -ChildPath "usersetup.ps1"
-    $MyInvocation.MyCommand.Definition | Out-File $localScriptPath -Encoding utf8
+    foreach ($path in $regPaths) {
+        if (-not (Test-Path $path)) {
+            New-Item -Path $path -Force | Out-Null
+        }
+    }
 
-    # !! IMPROVEMENT: Using -Command for a more robust call from RunOnce !!
-    $runOnceKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-    $commandToRun = "powershell.exe -ExecutionPolicy Bypass -Command `"`& '$localScriptPath' -Phase User`""
-    Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $commandToRun -Force
-    Write-Host "User phase has been staged to run at the next logon." -ForegroundColor Green
+    # 3. Set Dark Mode
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
 
-    # --- Self-Cleanup (System Phase) ---
-    Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "System phase complete." -ForegroundColor Green
-}
+    # 4. Disable Snap Assist
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
 
-# --- Function for User-Specific Operations ---
-function Start-UserPhase {
-    # (This function is unchanged from the previous version)
-    $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
-    Start-Transcript -Path $userLogPath -Force
-    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
-    $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
-    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
-    $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-    if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
+    # 5. Taskbar Configuration
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force  # Align left
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force # Remove Chat icon
+    Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force # Remove Widgets icon
+
+    # 6. Classic Context Menu
+    $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
     Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-    Write-Host "User preferences applied." -ForegroundColor Green
-    Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
-    Stop-Process -Name explorer -Force
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
-    $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
-    "Setup complete!" | Out-File -FilePath $noticePath -Encoding ASCII
-    Start-Process notepad.exe $noticePath
-    Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
-    Stop-Transcript
-}
 
-# --- SCRIPT ENTRY POINT ---
-try {
-    # Log which phase is actually running
-    Add-Content -Path "C:\Temp\InvocationLog.txt" -Value "      -> Detected Phase: $Phase"
-    if ($Phase -eq 'System') {
-        Start-SystemPhase
+    # 7. Unpin Default Taskbar Icons (Edge, Store) - Modified for Default User
+    Write-Host "Configuring default taskbar layout..."
+    # Remove default taskbar layout XML if it exists
+    $taskbarLayoutPath = "C:\Users\Default\AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml"
+    if (Test-Path $taskbarLayoutPath) {
+        Remove-Item -Path $taskbarLayoutPath -Force -ErrorAction SilentlyContinue
     }
-    elseif ($Phase -eq 'User') {
-        Start-UserPhase
-    }
+
+    Write-Host "Default User preferences applied successfully." -ForegroundColor Green
 }
 catch {
-    $errorMsg = "An unhandled error occurred in phase '$Phase': $_"
-    Write-Error $errorMsg
-    Add-Content -Path "C:\Temp\SetupError.log" -Value "$(Get-Date): $errorMsg"
-    if (Get-Transcript) { Stop-Transcript }
+    Write-Error "Failed to apply Default User settings: $_"
 }
+finally {
+    # ALWAYS unload the hive, even if errors occurred.
+    Write-Host "Unloading Default User hive."
+    reg unload HKLM\DefaultUser
+}
+
+# --- PHASE 3: CURRENT USER PREFERENCES (if not SYSTEM) ---
+# Apply settings to currently logged-in user if running in user context
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Host "Current user context: $currentUser" -ForegroundColor Yellow
+
+if ($currentUser -notlike "*SYSTEM*" -and $currentUser -notlike "*SERVICE*") {
+    Write-Host "Applying settings to current user: $currentUser" -ForegroundColor Cyan
+    
+    # Apply user-specific settings
+    try {
+        # Ensure HKCU paths exist
+        $hkcuPaths = @(
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search",
+            "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+        )
+        
+        foreach ($path in $hkcuPaths) {
+            if (-not (Test-Path $path)) {
+                New-Item -Path $path -Force | Out-Null
+            }
+        }
+
+        # Dark Mode
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+
+        # Snap Assist
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
+
+        # Taskbar Configuration
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
+
+        # Classic Context Menu
+        Set-ItemProperty -Path "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" -Name "(Default)" -Value "" -Force
+
+        Write-Host "Current user preferences applied successfully." -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Failed to apply some current user settings: $_"
+    }
+} else {
+    Write-Host "Running in SYSTEM context - user settings will be applied via Default User profile for new logins." -ForegroundColor Yellow
+}
+
+# --- PHASE 4: APPLICATION INSTALLATION ---
+# 1. Install Chocolatey
+Write-Host "Installing Chocolatey for all users..." -ForegroundColor Cyan
+Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+try {
+    Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
+    $env:Path += ";$env:ProgramData\chocolatey\bin"
+    $env:ChocolateyNonInteractive = 'true'
+    Write-Host "Chocolatey installed successfully." -ForegroundColor Green
+}
+catch {
+    Write-Error "Failed to install Chocolatey: $_"
+}
+
+# 2. Install Applications via Chocolatey
+Write-Host "Installing applications..." -ForegroundColor Cyan
+$apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+foreach ($app in $apps) {
+    Write-Host "Installing $app..."
+    try {
+        choco install $app -y --force --no-progress --ignore-checksums
+        Write-Host "$app installed successfully." -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Failed to install $app`: $_"
+    }
+}
+
+# --- PHASE 5: FINAL UI RESTART (only if not SYSTEM) ---
+if ($currentUser -notlike "*SYSTEM*") {
+    Write-Host "Restarting Explorer to apply all changes..."
+    Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-Process explorer.exe
+}
+
+# --- CLEANUP & COMPLETION ---
+# Cleanup Default User Profile if it exists
+$defaultUserPath = "C:\Users\defaultuser0"
+if (Test-Path $defaultUserPath) {
+    Write-Host "Removing DefaultUser0 profile..." -ForegroundColor Cyan
+    try {
+        Remove-Item -Path $defaultUserPath -Recurse -Force -ErrorAction Stop
+        Write-Host "DefaultUser0 profile removed successfully" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Failed to remove DefaultUser0 profile: $_" -ForegroundColor Red
+    }
+}
+
+# Create desktop notice (only if not running as SYSTEM)
+if ($currentUser -notlike "*SYSTEM*") {
+    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
+    @"
+Setup complete!
+
+Change the user password, and pin your browser of choice and Explorer to the taskbar.
+"@ | Out-File -FilePath $noticePath -Encoding ASCII
+    Start-Process notepad.exe $noticePath
+}
+
+# --- SELF-CLEANUP ---
+Write-Host "Removing setup task..." -ForegroundColor Cyan
+Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
+Write-Host "Setup task removed." -ForegroundColor Green
+
+Write-Host "Script completed successfully!" -ForegroundColor Green
