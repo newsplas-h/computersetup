@@ -7,11 +7,20 @@
 $taskName = "Run Setup Script at Logon"
 $githubUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/newscript.ps1"
 $taskDescription = "Downloads and runs the latest setup script from GitHub at logon."
+$logFile = "C:\Temp\SetupLog.txt" # All output from the GitHub script will be saved here.
 
 try {
-    # This command downloads and runs the script from GitHub directly in memory.
-    $command = "Invoke-Expression (Invoke-RestMethod -Uri '$githubUrl')"
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -NoProfile -Command `"$command`""
+    # Create the directory for the log file if it doesn't exist.
+    if (-not (Test-Path (Split-Path $logFile -Parent))) {
+        New-Item -ItemType Directory -Path (Split-Path $logFile -Parent) -Force | Out-Null
+    }
+
+    # This command now includes logging. It will:
+    # 1. Start a transcript (log) at the specified path.
+    # 2. Download and run your script from GitHub.
+    # 3. Stop the transcript.
+    $commandToRun = "Start-Transcript -Path '$logFile' -Force; Invoke-Expression (Invoke-RestMethod -Uri '$githubUrl'); Stop-Transcript"
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -NoProfile -Command `"$commandToRun`""
 
     # Configure the task to run at logon with the highest privileges.
     $trigger = New-ScheduledTaskTrigger -AtLogOn
