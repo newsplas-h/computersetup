@@ -47,10 +47,10 @@ function Start-SystemPhase {
     catch { Write-Error "Failed to apply Default User settings: $_" }
     finally {
         Write-Host "Unloading Default User hive."
-        reg unload HKLM\DefaultUser
+        reg unload HKLM\DefaultUser -ErrorAction SilentlyContinue
     }
 
-    # --- Phase 3: APPLICATION INSTALLATION ---
+    # --- Phase 3: APPLICATION INSTALLATION (SYSTEM ONLY) ---
     Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
@@ -58,13 +58,12 @@ function Start-SystemPhase {
         Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression
     } catch {
         Write-Error "FATAL: Failed to install Chocolatey. Cannot continue with application installs."
-        # The script will continue to the cleanup phase from here.
     }
 
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    #$apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    $apps = @("7zip", "notepadplusplus")
     
-    # !! IMPROVEMENT: Added error handling for each app install !!
     foreach ($app in $apps) {
         try {
             Write-Host "Installing $app..."
@@ -95,29 +94,24 @@ function Start-SystemPhase {
 
 # --- Function for User-Specific Operations ---
 function Start-UserPhase {
-    # !! IMPROVEMENT: Added dedicated logging for the User Phase !!
-    $userLogPath = "C:\Temp\UserSetupLog.txt"
+    # !! IMPROVEMENT: Log file is now in the user's own temp folder !!
+    $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
     
     Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
     
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
 
-    # 1. Set Dark Mode for the current user
+    # Set user-specific registry settings
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-
-    # 2. Disable Snap Assist
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
-
-    # 3. Taskbar Configuration
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
 
-    # 4. Classic Context Menu for the current user
     $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
     if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
     Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
@@ -135,7 +129,7 @@ function Start-UserPhase {
     @"
 Setup complete!
 
-Change the user password, and pin your browser of choice and Explorer to the taskbar.
+Your settings have been applied.
 This setup script has now been removed.
 "@ | Out-File -FilePath $noticePath -Encoding ASCII
     Start-Process notepad.exe $noticePath
