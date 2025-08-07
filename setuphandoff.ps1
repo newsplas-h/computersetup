@@ -1,5 +1,5 @@
 $taskName = "Run System Setup"
-$githubUrl = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/System-Setup.ps1" # <-- IMPORTANT: URL for Script #2
+$githubUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/handoffa.ps1 # <-- IMPORTANT: URL for Script #2
 $taskDescription = "Runs the main system configuration script as SYSTEM."
 
 try {
