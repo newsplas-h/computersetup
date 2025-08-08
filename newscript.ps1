@@ -17,9 +17,18 @@ function Start-SystemPhase {
     Write-Host "Setting system time zone to Eastern Time..."
     try {
         Set-TimeZone -Id "Eastern Standard Time"
+        
+        # !! NEW: Restart the time service to force the change to apply immediately. !!
+        Write-Host "Restarting Windows Time service to apply time zone change..."
+        Stop-Service -Name w32time -Force
+        Start-Service -Name w32time
+        
+        # Force the clock to synchronize with the internet time server.
+        Write-Host "Forcing time synchronization..."
+        w32tm.exe /resync /force
     }
     catch {
-        Write-Warning "Could not set the time zone. Error: $_"
+        Write-Warning "Could not set or sync the time zone. Error: $_"
     }
     
     Write-Host "Removing shortcut arrows by downloading a blank icon from GitHub..."
@@ -63,7 +72,7 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("everything", "notepadplusplus", "vlc")
+    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
     foreach ($app in $apps) {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
@@ -132,10 +141,16 @@ function Start-UserPhase {
     if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
     Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
     Write-Host "User preferences applied." -ForegroundColor Green
+    
+    Write-Host "Removing Microsoft Edge shortcut from the desktop..."
+    $userDesktop = [Environment]::GetFolderPath("Desktop")
+    $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+    Remove-Item -Path "$userDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$publicDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
+
     Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force
     
-    # !! UPDATED: Final notice is now a focused Command Prompt window. !!
     Write-Host "Displaying final notice in a new command prompt window."
     $title = "title IMPORTANT - PASSWORD CHANGE REQUIRED"
     $line1 = "echo."
@@ -147,7 +162,7 @@ function Start-UserPhase {
     $line7 = "echo."
     $line8 = "echo Please press CTRL+ALT+DELETE and select 'Change a password'."
     $line9 = "echo."
-    $line10 = "pause" # This will show "Press any key to continue..."
+    $line10 = "pause"
     $fullCommand = "$title & $line1 & $line2 & $line3 & $line4 & $line5 & $line6 & $line7 & $line8 & $line9 & $line10"
     $arguments = "/k $fullCommand"
 
