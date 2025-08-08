@@ -14,23 +14,22 @@ function Start-SystemPhase {
     
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
     
-    # !! UPDATED: New method for removing shortcut arrows !!
-    Write-Host "Removing shortcut arrows using blank icon method..."
+    # !! UPDATED: Download the blank icon from your GitHub repository. !!
+    Write-Host "Removing shortcut arrows by downloading a blank icon from GitHub..."
     try {
-        # !! UPDATED: Base64 for a true 16x16 transparent icon file. !!
-        $blankIconBase64 = "AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        $iconPath = Join-Path -Path $env:SystemRoot -ChildPath "blank.ico"
+        $iconUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/blank.ico"
+        $iconPath = Join-Path -Path $env:ProgramData -ChildPath "blank.ico"
         
-        # Decode the Base64 string and write the bytes to the .ico file
-        $iconBytes = [System.Convert]::FromBase64String($blankIconBase64)
-        [System.IO.File]::WriteAllBytes($iconPath, $iconBytes)
+        # Use the reliable .NET WebClient to download the icon file.
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($iconUrl, $iconPath)
 
-        # Point the registry to the new blank icon
+        # Point the registry to the downloaded icon.
         $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
         if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
         Set-ItemProperty -Path $keyPath -Name "29" -Value "$iconPath,0" -Type String -Force
     } catch {
-        Write-Warning "Could not create blank icon for shortcut arrows. Error: $_"
+        Write-Warning "Could not download or set blank icon for shortcut arrows. Error: $_"
     }
 
     $activePlan = powercfg -getactivescheme
@@ -59,7 +58,7 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("everything", "notepadplusplus")
+    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
     foreach ($app in $apps) {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
@@ -142,7 +141,6 @@ Please press CTRL+ALT+DELETE and select 'Change a password' to set a new permane
 "@ 
     $noticeText | Out-File -FilePath $noticePath -Encoding ASCII
     
-    # !! UPDATED: Launch Notepad and ensure it has focus. !!
     try {
         $process = Start-Process notepad.exe -ArgumentList $noticePath -PassThru
         Start-Sleep -Seconds 1
