@@ -1,42 +1,34 @@
 #Requires -RunAsAdministrator
 
+# This parameter allows the script to be called in two different phases.
 param(
     [ValidateSet('System', 'User')]
     [string]$Phase = 'System'
 )
 
-# --- SYSTEM-LEVEL SETUP ---
+# --- Function for System-Level Operations ---
 function Start-SystemPhase {
-    # Remove scheduled task to avoid repeat runs
+    # !! IMMEDIATE ACTION: Delete the scheduled task that launched this script !!
+    # This prevents the System Phase from ever running more than once.
     Write-Host "--- Deleting self-triggering scheduled task immediately ---" -ForegroundColor Cyan
     Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction Continue
-
-    Write-Host "--- SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
-
-    # Example: Set system-wide icon
+    
+    # Now, proceed with the rest of the setup.
+    Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
     $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
     if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
     Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
-
-    # Set power plan settings for all users
     $activePlan = powercfg -getactivescheme
     if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
         $guid = $matches[1]
-        powercfg /setacvalueindex $guid SUB_VIDEO VIDEOIDLE 0
-        powercfg /setacvalueindex $guid SUB_SLEEP STANDBYIDLE 0
-        powercfg /setdcvalueindex $guid SUB_VIDEO VIDEOIDLE 900
-        powercfg /setdcvalueindex $guid SUB_SLEEP STANDBYIDLE 900
+        powercfg /setacvalueindex $guid SUB_VIDEO VIDEOIDLE 0; powercfg /setacvalueindex $guid SUB_SLEEP STANDBYIDLE 0
+        powercfg /setdcvalueindex $guid SUB_VIDEO VIDEOIDLE 900; powercfg /setdcvalueindex $guid SUB_SLEEP STANDBYIDLE 900
         powercfg /setactive $guid
     }
-
-    # Apply user-defaults for NEW accounts (does NOT affect existing accounts!)
     try {
         reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
         $defaultUserRegPath = "HKLM:\DefaultUser"
-        $personalizePath = "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-        if (-not (Test-Path $personalizePath)) { New-Item -Path $personalizePath -Force | Out-Null }
-        Set-ItemProperty -Path $personalizePath -Name "AppsUseLightTheme" -Value 0 -Force
-
+        Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
         $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
         if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
         Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
@@ -44,11 +36,10 @@ function Start-SystemPhase {
     finally {
         Write-Host "Unloading Default User hive."
         [gc]::Collect()
-        reg.exe unload HKLM\DefaultUser | Out-Null
+        reg.exe unload HKLM\DefaultUser
     }
 
-    # --- APPLICATION INSTALLATION ---
-    Write-Host "--- APPLICATION INSTALLATION ---" -ForegroundColor Cyan
+    Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
@@ -58,7 +49,7 @@ function Start-SystemPhase {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
     
-    # --- STAGE USER-CONTEXT SCRIPT ---
+    # --- Phase 4: STAGE USER-CONTEXT SCRIPT ---
     Write-Host "--- Staging User-Specific Setup ---" -ForegroundColor Cyan
     $scriptDirectory = "C:\Temp\Setup"
     if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
@@ -75,60 +66,47 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $localCmdScriptPath -Force
     Write-Host "User phase has been staged to run via batch file at the next logon." -ForegroundColor Green
 
-    # --- OPTIONAL: AUTO-LOGON (INSECURE: REMOVE IN PRODUCTION) ---
+    # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
     $tempUsername = "NS"
     $tempPassword = "1234"
+
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1"
     Set-ItemProperty -Path $winlogonPath -Name "DefaultUserName" -Value $tempUsername
     Set-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -Value $tempPassword
     
-    # --- RESTART COMPUTER ---
+    # --- FINAL STEP: RESTART COMPUTER ---
     Write-Host "System phase complete. The computer will now restart in 5 seconds." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
     shutdown.exe /r /f /t 0
 }
 
-# --- USER-LEVEL SETUP ---
+# --- Function for User-Specific Operations ---
 function Start-UserPhase {
-    # Remove auto-logon and password from Winlogon
+    # --- IMMEDIATE SECURITY CLEANUP ---
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "0"
     Remove-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
 
     $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
-    Write-Host "--- USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
-
-    # Always operate on HKCU for user settings!
+    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
-    $personalizePath = "$regPath\Themes\Personalize"
-    if (-not (Test-Path $personalizePath)) { New-Item -Path $personalizePath -Force | Out-Null }
-    Set-ItemProperty -Path $personalizePath -Name "AppsUseLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path $personalizePath -Name "SystemUsesLightTheme" -Value 0 -Force
-
-    $explorerAdvPath = "$regPath\Explorer\Advanced"
-    if (-not (Test-Path $explorerAdvPath)) { New-Item -Path $explorerAdvPath -Force | Out-Null }
-    Set-ItemProperty -Path $explorerAdvPath -Name "EnableSnapAssistFlyout" -Value 0 -Force
-    Set-ItemProperty -Path $explorerAdvPath -Name "TaskbarAl" -Value 0 -Force
-    Set-ItemProperty -Path $explorerAdvPath -Name "ShowTaskViewButton" -Value 0 -Force
-    Set-ItemProperty -Path $explorerAdvPath -Name "TaskbarMn" -Value 0 -Force
-    Set-ItemProperty -Path $explorerAdvPath -Name "TaskbarDa" -Value 0 -Force
-
-    $searchPath = "$regPath\Search"
-    if (-not (Test-Path $searchPath)) { New-Item -Path $searchPath -Force | Out-Null }
-    Set-ItemProperty -Path $searchPath -Name "SearchboxTaskbarMode" -Value 0 -Force
-
+    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
     $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
     if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
     Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-
     Write-Host "User preferences applied." -ForegroundColor Green
     Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force
-
-    # Notify user and cleanup
     $desktopPath = [Environment]::GetFolderPath("Desktop")
     $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
     "Setup complete!" | Out-File -FilePath $noticePath -Encoding ASCII
