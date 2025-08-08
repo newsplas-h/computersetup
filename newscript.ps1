@@ -14,17 +14,23 @@ function Start-SystemPhase {
     
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
     
-    # !! UPDATED: Download the blank icon from your GitHub repository. !!
+    # Set the time zone to Eastern Time
+    Write-Host "Setting system time zone to Eastern Time..."
+    try {
+        Set-TimeZone -Id "Eastern Standard Time"
+    }
+    catch {
+        Write-Warning "Could not set the time zone. Error: $_"
+    }
+    
     Write-Host "Removing shortcut arrows by downloading a blank icon from GitHub..."
     try {
         $iconUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/blank.ico"
         $iconPath = Join-Path -Path $env:ProgramData -ChildPath "blank.ico"
         
-        # Use the reliable .NET WebClient to download the icon file.
         $webClient = New-Object System.Net.WebClient
         $webClient.DownloadFile($iconUrl, $iconPath)
 
-        # Point the registry to the downloaded icon.
         $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
         if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
         Set-ItemProperty -Path $keyPath -Name "29" -Value "$iconPath,0" -Type String -Force
