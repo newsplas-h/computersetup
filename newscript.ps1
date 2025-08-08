@@ -14,7 +14,6 @@ function Start-SystemPhase {
     
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
     
-    # Set the time zone to Eastern Time
     Write-Host "Setting system time zone to Eastern Time..."
     try {
         Set-TimeZone -Id "Eastern Standard Time"
@@ -64,7 +63,7 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    $apps = @("everything", "notepadplusplus", "vlc")
     foreach ($app in $apps) {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
@@ -135,26 +134,30 @@ function Start-UserPhase {
     Write-Host "User preferences applied." -ForegroundColor Green
     Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
-    $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
     
-    $noticeText = @"
-Setup is complete.
+    # !! UPDATED: Final notice is now a focused Command Prompt window. !!
+    Write-Host "Displaying final notice in a new command prompt window."
+    $title = "title IMPORTANT - PASSWORD CHANGE REQUIRED"
+    $line1 = "echo."
+    $line2 = "echo *******************************************************************************"
+    $line3 = "echo ** SETUP IS COMPLETE                               **"
+    $line4 = "echo *******************************************************************************"
+    $line5 = "echo."
+    $line6 = "echo For security, your temporary password must be changed now."
+    $line7 = "echo."
+    $line8 = "echo Please press CTRL+ALT+DELETE and select 'Change a password'."
+    $line9 = "echo."
+    $line10 = "pause" # This will show "Press any key to continue..."
+    $fullCommand = "$title & $line1 & $line2 & $line3 & $line4 & $line5 & $line6 & $line7 & $line8 & $line9 & $line10"
+    $arguments = "/k $fullCommand"
 
-For security, your password must be changed now.
-
-Please press CTRL+ALT+DELETE and select 'Change a password' to set a new permanent password.
-"@ 
-    $noticeText | Out-File -FilePath $noticePath -Encoding ASCII
-    
     try {
-        $process = Start-Process notepad.exe -ArgumentList $noticePath -PassThru
+        $process = Start-Process cmd.exe -ArgumentList $arguments -PassThru
         Start-Sleep -Seconds 1
         $wshell = New-Object -ComObject wscript.shell
         $wshell.AppActivate($process.Id) | Out-Null
     } catch {
-        # Fallback if focus method fails
-        Start-Process notepad.exe $noticePath
+        Start-Process cmd.exe -ArgumentList $arguments
     }
 
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
