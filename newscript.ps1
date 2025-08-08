@@ -13,9 +13,26 @@ function Start-SystemPhase {
     Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
     
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
-    $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
-    if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
-    Set-ItemProperty -Path $keyPath -Name "29" -Value "%SystemRoot%\System32\shell32.dll,-50" -Type String -Force
+    
+    # !! UPDATED: New method for removing shortcut arrows !!
+    Write-Host "Removing shortcut arrows using blank icon method..."
+    try {
+        # Base64 for a 1x1 transparent icon file
+        $blankIconBase64 = "AAABAAEAAQEAAAEAIAAwAAAAFgAAACgAAAABAAAAAQAAAAAEAIAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAA"
+        $iconPath = Join-Path -Path $env:SystemRoot -ChildPath "blank.ico"
+        
+        # Decode the Base64 string and write the bytes to the .ico file
+        $iconBytes = [System.Convert]::FromBase64String($blankIconBase64)
+        [System.IO.File]::WriteAllBytes($iconPath, $iconBytes)
+
+        # Point the registry to the new blank icon
+        $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
+        if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
+        Set-ItemProperty -Path $keyPath -Name "29" -Value "$iconPath,0" -Type String -Force
+    } catch {
+        Write-Warning "Could not create blank icon for shortcut arrows. Error: $_"
+    }
+
     $activePlan = powercfg -getactivescheme
     if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
         $guid = $matches[1]
@@ -52,8 +69,6 @@ function Start-SystemPhase {
     $scriptDirectory = "C:\Temp\Setup"
     if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
     $localPsScriptPath = Join-Path -Path $scriptDirectory -ChildPath "usersetup.ps1"
-
-    # !! FINAL FIX: Replace failing Invoke-RestMethod with a more reliable .NET WebClient downloader. !!
     $githubUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/newscript.ps1"
     try {
         Write-Host "Downloading fresh script for User Phase from $githubUrl"
@@ -117,8 +132,17 @@ function Start-UserPhase {
     Stop-Process -Name explorer -Force
     $desktopPath = [Environment]::GetFolderPath("Desktop")
     $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
-    "Setup complete!" | Out-File -FilePath $noticePath -Encoding ASCII
+    
+    # !! UPDATED: Text now prompts for a password change. !!
+    @"
+Setup is complete.
+
+For security, your password must be changed now.
+
+Please press CTRL+ALT+DELETE and select 'Change a password' to set a new permanent password.
+"@ | Out-File -FilePath $noticePath -Encoding ASCII
     Start-Process notepad.exe $noticePath
+
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
     Stop-Transcript
 }
