@@ -17,8 +17,8 @@ function Start-SystemPhase {
     # !! UPDATED: New method for removing shortcut arrows !!
     Write-Host "Removing shortcut arrows using blank icon method..."
     try {
-        # Base64 for a 1x1 transparent icon file
-        $blankIconBase64 = "AAABAAEAAQEAAAEAIAAwAAAAFgAAACgAAAABAAAAAQAAAAAEAIAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAA"
+        # !! UPDATED: Base64 for a true 16x16 transparent icon file. !!
+        $blankIconBase64 = "AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         $iconPath = Join-Path -Path $env:SystemRoot -ChildPath "blank.ico"
         
         # Decode the Base64 string and write the bytes to the .ico file
@@ -59,7 +59,7 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    $apps = @("everything", "notepadplusplus")
     foreach ($app in $apps) {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
@@ -133,15 +133,25 @@ function Start-UserPhase {
     $desktopPath = [Environment]::GetFolderPath("Desktop")
     $noticePath = Join-Path -Path $desktopPath -ChildPath "Setup Complete.txt"
     
-    # !! UPDATED: Text now prompts for a password change. !!
-    @"
+    $noticeText = @"
 Setup is complete.
 
 For security, your password must be changed now.
 
 Please press CTRL+ALT+DELETE and select 'Change a password' to set a new permanent password.
-"@ | Out-File -FilePath $noticePath -Encoding ASCII
-    Start-Process notepad.exe $noticePath
+"@ 
+    $noticeText | Out-File -FilePath $noticePath -Encoding ASCII
+    
+    # !! UPDATED: Launch Notepad and ensure it has focus. !!
+    try {
+        $process = Start-Process notepad.exe -ArgumentList $noticePath -PassThru
+        Start-Sleep -Seconds 1
+        $wshell = New-Object -ComObject wscript.shell
+        $wshell.AppActivate($process.Id) | Out-Null
+    } catch {
+        # Fallback if focus method fails
+        Start-Process notepad.exe $noticePath
+    }
 
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
     Stop-Transcript
