@@ -8,12 +8,10 @@ param(
 
 # --- Function for System-Level Operations ---
 function Start-SystemPhase {
-    # !! IMMEDIATE ACTION: Delete the scheduled task that launched this script !!
-    # This prevents the System Phase from ever running more than once.
+    # IMMEDIATE ACTION: Delete the scheduled task that launched this script.
     Write-Host "--- Deleting self-triggering scheduled task immediately ---" -ForegroundColor Cyan
-    Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction Continue
+    Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
     
-    # Now, proceed with the rest of the setup.
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
     $keyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"
     if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
@@ -54,7 +52,18 @@ function Start-SystemPhase {
     $scriptDirectory = "C:\Temp\Setup"
     if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
     $localPsScriptPath = Join-Path -Path $scriptDirectory -ChildPath "usersetup.ps1"
-    $MyInvocation.MyCommand.Definition | Out-File $localPsScriptPath -Encoding utf8
+
+    # !! FINAL FIX: Replace failing Invoke-RestMethod with a more reliable .NET WebClient downloader. !!
+    $githubUrl = "https://raw.githubusercontent.com/newsplas-h/computersetup/refs/heads/main/newscript.ps1"
+    try {
+        Write-Host "Downloading fresh script for User Phase from $githubUrl"
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($githubUrl, $localPsScriptPath)
+    } catch {
+        Write-Error "CRITICAL: Failed to download script for User Phase. Cannot continue."
+        return
+    }
+
     $localCmdScriptPath = Join-Path -Path $scriptDirectory -ChildPath "RunUserPhase.cmd"
     $batchFileContent = @"
 @echo off
@@ -70,7 +79,6 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
     $tempUsername = "NS"
     $tempPassword = "1234"
-
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1"
     Set-ItemProperty -Path $winlogonPath -Name "DefaultUserName" -Value $tempUsername
