@@ -72,7 +72,7 @@ function Start-SystemPhase {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
     $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc")
+    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc", "superf4", "steam", "discord")
     foreach ($app in $apps) {
         try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
     }
