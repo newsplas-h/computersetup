@@ -25,6 +25,14 @@ function Start-SystemPhase {
 
     $tempUsername = "NS"
     $tempPassword = "1234"
+    $eventSource = "ComputerSetup"
+    try {
+        if (-not [System.Diagnostics.EventLog]::SourceExists($eventSource)) {
+            New-EventLog -LogName Application -Source $eventSource
+        }
+    } catch {
+        Write-Warning "Could not create event log source '$eventSource': $_"
+    }
     
     Write-Host "Setting system time zone to Eastern Time..."
     try {
@@ -107,13 +115,11 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
 
     # --- STAGE APP INSTALLS (RUNS AFTER USER PHASE) ---
     $appsTaskName = "Run App Installs Once"
-    $appsAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
-    $appsTrigger = New-ScheduledTaskTrigger -AtLogOn
-    $appsTrigger.Enabled = $false
-    $appsPrincipal = New-ScheduledTaskPrincipal -UserId $tempUsername -RunLevel Highest -LogonType Interactive
+    $appsEventQuery = "<QueryList><Query Id='0' Path='Application'><Select Path='Application'>*[System[Provider[@Name='$eventSource'] and EventID=1001]]</Select></Query></QueryList>"
+    $appsCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
     Unregister-ScheduledTask -TaskName $appsTaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName $appsTaskName -Action $appsAction -Trigger $appsTrigger -Principal $appsPrincipal -Description "Installs applications after user prefs are applied." -Force
-    Write-Host "App install task has been staged to run after user preferences." -ForegroundColor Green
+    schtasks.exe /Create /TN $appsTaskName /SC ONEVENT /EC Application /MO $appsEventQuery /TR $appsCommand /RU SYSTEM /RL HIGHEST /F | Out-Null
+    Write-Host "App install task has been staged to run after user preferences (event-triggered)." -ForegroundColor Green
 
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
@@ -130,13 +136,16 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
 
 # --- Function for User-Specific Operations ---
 function Start-UserPhase {
-    $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
+    if (-not (Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null }
+    $userLogPath = "C:\Temp\UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
     Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "SnapAssist" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapBar" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 1 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
@@ -156,6 +165,13 @@ function Start-UserPhase {
     Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force
     Start-Process explorer.exe -ErrorAction SilentlyContinue
+
+    # Trigger app installs as soon as user prefs are done (no built-in delay).
+    try {
+        Write-EventLog -LogName Application -Source "ComputerSetup" -EventId 1001 -EntryType Information -Message "User phase complete. Trigger app installs."
+    } catch {
+        Write-Warning "Could not write event log to trigger app installs: $_"
+    }
     
     Write-Host "Displaying final notice in a new command prompt window."
     $title = "title IMPORTANT - PASSWORD CHANGE REQUIRED"
