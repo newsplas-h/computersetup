@@ -39,25 +39,48 @@ function Show-PasswordChangeNotice {
     }
 }
 
-function Read-DesiredUserName {
-    while ($true) {
-        $inputName = Read-Host "Enter desired account name (press Enter to keep '$env:USERNAME')"
-        $name = $inputName.Trim()
-        if ([string]::IsNullOrWhiteSpace($name)) { return $null }
-        if ($name.Length -gt 20) {
-            Write-Host "Name too long. Please use 20 characters or fewer." -ForegroundColor Yellow
-            continue
-        }
-        if ($name -match '[\\\/\[\]:;\|=,\+\*\?<>\"]') {
-            Write-Host "Name contains invalid characters. Try again." -ForegroundColor Yellow
-            continue
-        }
-        if ($name.EndsWith('.') -or $name.EndsWith(' ')) {
-            Write-Host "Name cannot end with a period or space. Try again." -ForegroundColor Yellow
-            continue
-        }
-        return $name
+function Prompt-DesiredUserName {
+    param(
+        [string]$DefaultName
+    )
+    $scriptDirectory = "C:\Temp\Setup"
+    if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
+    $promptScriptPath = Join-Path $scriptDirectory "PromptUserName.ps1"
+    $resultPath = Join-Path $scriptDirectory "DesiredUser.txt"
+
+    $promptScript = @'
+param([string]$DefaultName, [string]$OutPath)
+while ($true) {
+    $inputName = Read-Host "Enter desired account name (press Enter to keep '$DefaultName')"
+    $name = $inputName.Trim()
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        $DefaultName | Out-File -FilePath $OutPath -Encoding ASCII -Force
+        break
     }
+    if ($name.Length -gt 20) {
+        Write-Host "Name too long. Please use 20 characters or fewer." -ForegroundColor Yellow
+        continue
+    }
+    if ($name -match '[\\\/\[\]:;\|=,\+\*\?<>\"]') {
+        Write-Host "Name contains invalid characters. Try again." -ForegroundColor Yellow
+        continue
+    }
+    if ($name.EndsWith('.') -or $name.EndsWith(' ')) {
+        Write-Host "Name cannot end with a period or space. Try again." -ForegroundColor Yellow
+        continue
+    }
+    $name | Out-File -FilePath $OutPath -Encoding ASCII -Force
+    break
+}
+Read-Host "Press Enter to continue"
+'@
+    $promptScript | Out-File -FilePath $promptScriptPath -Encoding ASCII -Force
+
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$promptScriptPath`" -DefaultName `"$DefaultName`" -OutPath `"$resultPath`"" -Wait
+    if (Test-Path $resultPath) {
+        return (Get-Content -Raw $resultPath).Trim()
+    }
+    return $null
 }
 
 function Set-DesiredUserInfo {
@@ -95,14 +118,6 @@ function Start-SystemPhase {
 
     $tempUsername = "NS"
     $tempPassword = "1234"
-    $eventSource = "ComputerSetup"
-    try {
-        if (-not [System.Diagnostics.EventLog]::SourceExists($eventSource)) {
-            New-EventLog -LogName Application -Source $eventSource
-        }
-    } catch {
-        Write-Warning "Could not create event log source '$eventSource': $_"
-    }
     
     Write-Host "Setting system time zone to Eastern Time..."
     try {
@@ -147,6 +162,31 @@ function Start-SystemPhase {
         reg load HKLM\DefaultUser C:\Users\Default\ntuser.dat
         $defaultUserRegPath = "HKLM:\DefaultUser"
         Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+        Set-ItemProperty -Path "$defaultUserRegPath\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+
+        $defaultAdvancedPath = "$defaultUserRegPath\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        if (-not (Test-Path $defaultAdvancedPath)) { New-Item -Path $defaultAdvancedPath -Force | Out-Null }
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "SnapAssist" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "EnableSnapBar" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "EnableSnapAssistFlyout" -Value 1 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "HideFileExt" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "Hidden" -Value 1 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "LaunchTo" -Value 1 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "TaskbarAl" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "ShowTaskViewButton" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "TaskbarMn" -Value 0 -Force
+        Set-ItemProperty -Path $defaultAdvancedPath -Name "TaskbarDa" -Value 0 -Force
+
+        $defaultSearchPath = "$defaultUserRegPath\Software\Microsoft\Windows\CurrentVersion\Search"
+        if (-not (Test-Path $defaultSearchPath)) { New-Item -Path $defaultSearchPath -Force | Out-Null }
+        Set-ItemProperty -Path $defaultSearchPath -Name "SearchboxTaskbarMode" -Value 0 -Force
+
+        $defaultMousePath = "$defaultUserRegPath\Control Panel\Mouse"
+        if (-not (Test-Path $defaultMousePath)) { New-Item -Path $defaultMousePath -Force | Out-Null }
+        Set-ItemProperty -Path $defaultMousePath -Name "MouseSpeed" -Value "0" -Force
+        Set-ItemProperty -Path $defaultMousePath -Name "MouseThreshold1" -Value "0" -Force
+        Set-ItemProperty -Path $defaultMousePath -Name "MouseThreshold2" -Value "0" -Force
+
         $contextMenuPath = "$defaultUserRegPath\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
         if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
         Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
@@ -183,49 +223,25 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $localCmdScriptPath -Force
     Write-Host "User phase has been staged to run via batch file at the next logon." -ForegroundColor Green
 
-    # --- STAGE APP INSTALLS (RUNS AFTER USER PHASE) ---
+    # --- STAGE APP INSTALLS (RUNS AT LOGON, SYSTEM) ---
     $appsTaskName = "Run App Installs Once"
-    $appsEventQuery = "<QueryList><Query Id='0' Path='Application'><Select Path='Application'>*[System[Provider[@Name='$eventSource'] and EventID=1001]]</Select></Query></QueryList>"
-    $appsCommand = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
+    $appsAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
+    $appsTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $appsPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+    $appsSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable
     Unregister-ScheduledTask -TaskName $appsTaskName -Confirm:$false -ErrorAction SilentlyContinue
-    $createTask = Start-Process -FilePath schtasks.exe -ArgumentList @(
-        "/Create",
-        "/TN", $appsTaskName,
-        "/SC", "ONEVENT",
-        "/EC", "Application",
-        "/MO", $appsEventQuery,
-        "/TR", $appsCommand,
-        "/RU", "SYSTEM",
-        "/RL", "HIGHEST",
-        "/F"
-    ) -NoNewWindow -Wait -PassThru
-    if ($createTask.ExitCode -ne 0) {
-        Write-Warning "Failed to create app install task. Exit code: $($createTask.ExitCode)"
-    } else {
-        Write-Host "App install task has been staged to run after user preferences (event-triggered)." -ForegroundColor Green
-    }
+    Register-ScheduledTask -TaskName $appsTaskName -Action $appsAction -Trigger $appsTrigger -Principal $appsPrincipal -Settings $appsSettings -Description "Installs applications after setup." -Force
+    Write-Host "App install task has been staged to run at logon." -ForegroundColor Green
 
-    # --- STAGE CLEANUP TASK (RUNS AFTER FINALIZATION) ---
+    # --- STAGE CLEANUP TASK (RUNS AT STARTUP, SYSTEM) ---
     $cleanupTaskName = "Cleanup Old Account"
-    $cleanupEventQuery = "<QueryList><Query Id='0' Path='Application'><Select Path='Application'>*[System[Provider[@Name='$eventSource'] and EventID=2002]]</Select></Query></QueryList>"
-    $cleanupCommand = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Cleanup"
+    $cleanupAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Cleanup"
+    $cleanupTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $cleanupPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+    $cleanupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable
     Unregister-ScheduledTask -TaskName $cleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue
-    $createCleanupTask = Start-Process -FilePath schtasks.exe -ArgumentList @(
-        "/Create",
-        "/TN", $cleanupTaskName,
-        "/SC", "ONEVENT",
-        "/EC", "Application",
-        "/MO", $cleanupEventQuery,
-        "/TR", $cleanupCommand,
-        "/RU", "SYSTEM",
-        "/RL", "HIGHEST",
-        "/F"
-    ) -NoNewWindow -Wait -PassThru
-    if ($createCleanupTask.ExitCode -ne 0) {
-        Write-Warning "Failed to create cleanup task. Exit code: $($createCleanupTask.ExitCode)"
-    } else {
-        Write-Host "Cleanup task has been staged for post-finalization." -ForegroundColor Green
-    }
+    Register-ScheduledTask -TaskName $cleanupTaskName -Action $cleanupAction -Trigger $cleanupTrigger -Principal $cleanupPrincipal -Settings $cleanupSettings -Description "Cleans up old account after rename." -Force
+    Write-Host "Cleanup task has been staged for next startup." -ForegroundColor Green
 
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
@@ -248,7 +264,8 @@ function Start-UserPhase {
     $scriptDirectory = "C:\Temp\Setup"
     if (-not (Test-Path $scriptDirectory)) { New-Item -ItemType Directory -Path $scriptDirectory -Force | Out-Null }
     $renameRequested = $false
-    $desiredName = Read-DesiredUserName
+    $desiredName = Prompt-DesiredUserName -DefaultName $env:USERNAME
+    if (-not $desiredName) { $desiredName = $env:USERNAME }
     if ($desiredName -and ($desiredName -ne $env:USERNAME)) {
         Set-DesiredUserInfo -OldUser $env:USERNAME -NewUser $desiredName -Requested $true
         $renameRequested = $true
@@ -266,6 +283,12 @@ function Start-UserPhase {
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "HideFileExt" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "Hidden" -Value 1 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "LaunchTo" -Value 1 -Force
+    $mousePath = "HKCU:\Control Panel\Mouse"
+    if (-not (Test-Path $mousePath)) { New-Item -Path $mousePath -Force | Out-Null }
+    Set-ItemProperty -Path $mousePath -Name "MouseSpeed" -Value "0" -Force
+    Set-ItemProperty -Path $mousePath -Name "MouseThreshold1" -Value "0" -Force
+    Set-ItemProperty -Path $mousePath -Name "MouseThreshold2" -Value "0" -Force
+    try { rundll32.exe user32.dll,UpdatePerUserSystemParameters } catch {}
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
@@ -286,12 +309,6 @@ function Start-UserPhase {
     Stop-Process -Name explorer -Force
     Start-Process explorer.exe -ErrorAction SilentlyContinue
 
-    # Trigger app installs as soon as user prefs are done (no built-in delay).
-    try {
-        Write-EventLog -LogName Application -Source "ComputerSetup" -EventId 1001 -EntryType Information -Message "User phase complete. Trigger app installs."
-    } catch {
-        Write-Warning "Could not write event log to trigger app installs: $_"
-    }
     if (-not $renameRequested) {
         Show-PasswordChangeNotice
     } else {
@@ -344,6 +361,10 @@ function Start-AppsPhase {
             Write-Warning "Failed to create or update user '$newUser': $_"
         }
 
+        # Signal cleanup after the new account has logged in.
+        $cleanupFlag = "C:\Temp\Setup\Cleanup.flag"
+        "Cleanup requested" | Out-File -FilePath $cleanupFlag -Encoding ASCII -Force
+
         # Set auto-logon to the new account for the next boot.
         $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1"
@@ -376,6 +397,8 @@ function Start-FinalPhase {
     if (-not (Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null }
     $finalLogPath = "C:\Temp\FinalizeLog.txt"
     Start-Transcript -Path $finalLogPath -Force
+    $finalFlag = "C:\Temp\Setup\Finalize.flag"
+    "Finalized" | Out-File -FilePath $finalFlag -Encoding ASCII -Force
 
     $desiredInfo = Get-DesiredUserInfo
     if (-not $desiredInfo -or -not $desiredInfo.NewUser) {
@@ -389,13 +412,6 @@ function Start-FinalPhase {
 
     Show-PasswordChangeNotice
 
-    # Trigger cleanup to remove the old account and disable auto-logon.
-    try {
-        Write-EventLog -LogName Application -Source "ComputerSetup" -EventId 2002 -EntryType Information -Message "Finalize complete. Trigger cleanup."
-    } catch {
-        Write-Warning "Could not write event log to trigger cleanup: $_"
-    }
-
     Stop-Transcript
 }
 
@@ -405,6 +421,23 @@ function Start-CleanupPhase {
     if (-not (Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null }
     $cleanupLogPath = "C:\Temp\CleanupLog.txt"
     Start-Transcript -Path $cleanupLogPath -Force
+
+    $cleanupFlag = "C:\Temp\Setup\Cleanup.flag"
+    $finalFlag = "C:\Temp\Setup\Finalize.flag"
+    if (-not (Test-Path $cleanupFlag)) {
+        Stop-Transcript
+        return
+    }
+    $waitSeconds = 60
+    $elapsed = 0
+    while (-not (Test-Path $finalFlag) -and $elapsed -lt $waitSeconds) {
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+    }
+    if (-not (Test-Path $finalFlag)) {
+        Stop-Transcript
+        return
+    }
 
     $desiredInfo = Get-DesiredUserInfo
     if ($desiredInfo -and $desiredInfo.OldUser -and $desiredInfo.NewUser -and ($desiredInfo.OldUser -ne $desiredInfo.NewUser)) {
@@ -435,6 +468,8 @@ function Start-CleanupPhase {
 
     # Cleanup tasks and staging.
     Unregister-ScheduledTask -TaskName "Cleanup Old Account" -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -Path $cleanupFlag -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $finalFlag -Force -ErrorAction SilentlyContinue
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
 
     Stop-Transcript
