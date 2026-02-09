@@ -217,6 +217,16 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Disable-ScheduledTask -TaskName $appsTaskName -ErrorAction SilentlyContinue
     Write-Host "App install task has been staged to run at logon." -ForegroundColor Green
 
+    # --- STAGE RENAME HANDLER (RUNS AT STARTUP, SYSTEM) ---
+    $renameTaskName = "Rename Account and Reboot"
+    $renameAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Rename"
+    $renameTrigger = New-ScheduledTaskTrigger -AtStartup
+    $renamePrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+    $renameSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Unregister-ScheduledTask -TaskName $renameTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $renameTaskName -Action $renameAction -Trigger $renameTrigger -Principal $renamePrincipal -Settings $renameSettings -Description "Creates new admin account and reboots when requested." -Force
+    Write-Host "Rename handler task has been staged (startup trigger)." -ForegroundColor Green
+
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
@@ -276,20 +286,9 @@ function Start-UserPhase {
     $desiredName = Prompt-DesiredUserName -DefaultName $env:USERNAME
     if ($desiredName -and ($desiredName -ne $env:USERNAME)) {
         Write-DesiredUserInfo -OldUser $env:USERNAME -NewUser $desiredName
-        Write-Host "Account rename requested. Creating '$desiredName' and rebooting now..." -ForegroundColor Yellow
-
-        $localPsScriptPath = "C:\Temp\Setup\usersetup.ps1"
-        $renameTaskName = "Rename Account and Reboot"
-        $renameAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Rename"
-        $renameTrigger = New-ScheduledTaskTrigger -AtLogOn
-        $renamePrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
-        $renameSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable
-        Unregister-ScheduledTask -TaskName $renameTaskName -Confirm:$false -ErrorAction SilentlyContinue
-        Register-ScheduledTask -TaskName $renameTaskName -Action $renameAction -Trigger $renameTrigger -Principal $renamePrincipal -Settings $renameSettings -Description "Creates new admin account and reboots." -Force
-
-        Enable-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
-        Start-ScheduledTask -TaskName $renameTaskName
+        Write-Host "Account rename requested. Rebooting now..." -ForegroundColor Yellow
         Stop-Transcript
+        shutdown.exe /r /f /t 0
         return
     } else {
         Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
@@ -342,16 +341,17 @@ function Start-AppsPhase {
 function Start-RenamePhase {
     Assert-Admin
     Ensure-SetupDirs
-    $renameLogPath = "C:\Temp\RenameLog.txt"
-    Start-Transcript -Path $renameLogPath -Force
 
     $info = Read-DesiredUserInfo
     if (-not $info -or -not $info.NewUser) {
-        Stop-Transcript
         return
     }
 
+    $renameLogPath = "C:\Temp\RenameLog.txt"
+    Start-Transcript -Path $renameLogPath -Force
+
     $newUser = $info.NewUser
+    $oldUser = $info.OldUser
     $tempPassword = "1234"
     Write-Host "Creating or updating admin account '$newUser'..." -ForegroundColor Yellow
     try {
@@ -377,6 +377,52 @@ function Start-RenamePhase {
     Set-ItemProperty -Path $runOnceKey -Name "ComputerSetupFinal" -Value $finalCmd -Force
 
     Enable-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
+
+    if ($oldUser -and ($oldUser -ne $newUser)) {
+        $protected = @("Administrator", "DefaultAccount", "WDAGUtilityAccount")
+        if ($protected -notcontains $oldUser) {
+            Write-Host "Removing old account '$oldUser' and profile..." -ForegroundColor Yellow
+            try {
+                $oldProfile = Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.LocalPath -ieq ("C:\Users\" + $oldUser) }
+                if ($oldProfile) { $oldProfile | Remove-CimInstance }
+            } catch {
+                Write-Warning "Failed to remove profile for '$oldUser': $_"
+            }
+            try {
+                Remove-LocalUser -Name $oldUser -ErrorAction SilentlyContinue
+            } catch {
+                Write-Warning "Failed to remove user '$oldUser': $_"
+            }
+            try {
+                $oldPath = "C:\Users\$oldUser"
+                if (Test-Path $oldPath) { Remove-Item -Path $oldPath -Recurse -Force -ErrorAction SilentlyContinue }
+            } catch {
+                Write-Warning "Failed to remove folder for '$oldUser': $_"
+            }
+        }
+    }
+
+    # Always attempt to remove the NS profile folder when a new username is chosen.
+    if ($newUser -ne "NS") {
+        try {
+            $nsPath = "C:\Users\NS"
+            if (Test-Path $nsPath) { Remove-Item -Path $nsPath -Recurse -Force -ErrorAction SilentlyContinue }
+        } catch {
+            Write-Warning "Failed to remove C:\\Users\\NS: $_"
+        }
+
+        try {
+            Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "NS.*" } |
+                ForEach-Object {
+                    try { Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+                }
+        } catch {
+            Write-Warning "Failed to remove C:\\Users\\NS.*: $_"
+        }
+    }
 
     Write-Host "Rebooting into '$newUser' now..." -ForegroundColor Yellow
     Stop-Transcript
