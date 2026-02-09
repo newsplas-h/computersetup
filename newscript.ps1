@@ -1,18 +1,30 @@
-#Requires -RunAsAdministrator
-
 # This parameter allows the script to be called in two different phases.
 param(
-    [ValidateSet('System', 'User')]
+    [ValidateSet('System', 'User', 'Apps')]
     [string]$Phase = 'System'
 )
 
+# --- Helper: Require admin only when needed ---
+function Assert-Admin {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "This phase must be run as Administrator."
+    }
+}
+
 # --- Function for System-Level Operations ---
 function Start-SystemPhase {
+    Assert-Admin
+
     # IMMEDIATE ACTION: Delete the scheduled task that launched this script.
     Write-Host "--- Deleting self-triggering scheduled task immediately ---" -ForegroundColor Cyan
     Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
     
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
+
+    $tempUsername = "NS"
+    $tempPassword = "1234"
     
     Write-Host "Setting system time zone to Eastern Time..."
     try {
@@ -67,16 +79,6 @@ function Start-SystemPhase {
         reg.exe unload HKLM\DefaultUser
     }
 
-    Write-Host "--- Starting Phase 3: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
-    $env:Path += ";$env:ProgramData\chocolatey\bin"
-    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc", "superf4", "steam", "discord")
-    foreach ($app in $apps) {
-        try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
-    }
-    
     # --- Phase 4: STAGE USER-CONTEXT SCRIPT ---
     Write-Host "--- Staging User-Specific Setup ---" -ForegroundColor Cyan
     $scriptDirectory = "C:\Temp\Setup"
@@ -103,10 +105,18 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Set-ItemProperty -Path $runOnceKey -Name "ComputerUserSetup" -Value $localCmdScriptPath -Force
     Write-Host "User phase has been staged to run via batch file at the next logon." -ForegroundColor Green
 
+    # --- STAGE APP INSTALLS (RUNS AFTER USER PHASE) ---
+    $appsTaskName = "Run App Installs Once"
+    $appsAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
+    $appsTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $appsTrigger.Enabled = $false
+    $appsPrincipal = New-ScheduledTaskPrincipal -UserId $tempUsername -RunLevel Highest -LogonType InteractiveToken
+    Unregister-ScheduledTask -TaskName $appsTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $appsTaskName -Action $appsAction -Trigger $appsTrigger -Principal $appsPrincipal -Description "Installs applications after user prefs are applied." -Force
+    Write-Host "App install task has been staged to run after user preferences." -ForegroundColor Green
+
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
-    $tempUsername = "NS"
-    $tempPassword = "1234"
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1"
     Set-ItemProperty -Path $winlogonPath -Name "DefaultUserName" -Value $tempUsername
@@ -120,11 +130,6 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
 
 # --- Function for User-Specific Operations ---
 function Start-UserPhase {
-    # --- IMMEDIATE SECURITY CLEANUP ---
-    $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-    Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "0"
-    Remove-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
-
     $userLogPath = Join-Path -Path $env:TEMP -ChildPath "UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
     Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
@@ -150,6 +155,7 @@ function Start-UserPhase {
 
     Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force
+    Start-Process explorer.exe -ErrorAction SilentlyContinue
     
     Write-Host "Displaying final notice in a new command prompt window."
     $title = "title IMPORTANT - PASSWORD CHANGE REQUIRED"
@@ -175,6 +181,40 @@ function Start-UserPhase {
         Start-Process cmd.exe -ArgumentList $arguments
     }
 
+    # Kick off app installs only after user preferences are in place.
+    try {
+        Start-ScheduledTask -TaskName "Run App Installs Once"
+    } catch {
+        Write-Warning "Could not start app install task: $_"
+    }
+
+    Stop-Transcript
+}
+
+# --- Function for Application Installation (runs as SYSTEM) ---
+function Start-AppsPhase {
+    Assert-Admin
+
+    $appsLogPath = "C:\Temp\SetupAppsLog.txt"
+    Start-Transcript -Path $appsLogPath -Force
+    Write-Host "--- Starting Phase: APPLICATION INSTALLATION ---" -ForegroundColor Cyan
+
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    try { Invoke-RestMethod https://chocolatey.org/install.ps1 | Invoke-Expression } catch { Write-Error "FATAL: Failed to install Chocolatey." }
+    $env:Path += ";$env:ProgramData\chocolatey\bin"
+    $apps = @("googlechrome", "firefox", "7zip", "windirstat", "everything", "notepadplusplus", "vlc", "superf4", "steam", "discord")
+    foreach ($app in $apps) {
+        try { choco install $app -y --force --no-progress } catch { Write-Warning "Could not install '$app'." }
+    }
+
+    # --- SECURITY CLEANUP (requires admin) ---
+    $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "0"
+    Remove-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
+
+    # Cleanup: remove the task so it doesn't run again and delete staged files.
+    Unregister-ScheduledTask -TaskName "Run App Installs Once" -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -Path "C:\Temp\Setup" -Recurse -Force -ErrorAction SilentlyContinue
     Stop-Transcript
 }
@@ -186,6 +226,9 @@ try {
     }
     elseif ($Phase -eq 'User') {
         Start-UserPhase
+    }
+    elseif ($Phase -eq 'Apps') {
+        Start-AppsPhase
     }
 }
 catch {
