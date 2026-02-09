@@ -23,14 +23,17 @@ try {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -NoProfile -Command `"$commandToRun`""
 
     # Configure the task to run at logon with the highest privileges.
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+    $trigger = @(
+        New-ScheduledTaskTrigger -AtStartup
+        New-ScheduledTaskTrigger -AtLogOn
+    )
+    $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest -LogonType ServiceAccount
 
     # Unregister the task if it already exists to ensure it's always up-to-date.
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
 
     # Register the new scheduled task.
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription -Force
     Start-ScheduledTask -TaskName $taskName
 

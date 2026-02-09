@@ -89,6 +89,46 @@ function Show-PasswordChangeNotice {
     }
 }
 
+function Apply-UserPreferences {
+    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
+    $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
+    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "SnapAssist" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapBar" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 1 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "HideFileExt" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "Hidden" -Value 1 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "LaunchTo" -Value 1 -Force
+
+    $mousePath = "HKCU:\Control Panel\Mouse"
+    if (-not (Test-Path $mousePath)) { New-Item -Path $mousePath -Force | Out-Null }
+    Set-ItemProperty -Path $mousePath -Name "MouseSpeed" -Value "0" -Force
+    Set-ItemProperty -Path $mousePath -Name "MouseThreshold1" -Value "0" -Force
+    Set-ItemProperty -Path $mousePath -Name "MouseThreshold2" -Value "0" -Force
+    try { rundll32.exe user32.dll,UpdatePerUserSystemParameters } catch {}
+
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
+    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
+    $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+    if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
+    Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
+    Write-Host "User preferences applied." -ForegroundColor Green
+
+    Write-Host "Removing Microsoft Edge shortcut from the desktop..."
+    $userDesktop = [Environment]::GetFolderPath("Desktop")
+    $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+    Remove-Item -Path "$userDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$publicDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
+
+    Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name explorer -Force
+    Start-Process explorer.exe -ErrorAction SilentlyContinue
+}
+
 # --- Function for System-Level Operations ---
 function Start-SystemPhase {
     Assert-Admin
@@ -245,43 +285,7 @@ function Start-UserPhase {
     $userLogPath = "C:\Temp\UserSetupLog.txt"
     Start-Transcript -Path $userLogPath -Force
 
-    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
-    $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
-    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "SnapAssist" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapBar" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "EnableSnapAssistFlyout" -Value 1 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "HideFileExt" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "Hidden" -Value 1 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "LaunchTo" -Value 1 -Force
-
-    $mousePath = "HKCU:\Control Panel\Mouse"
-    if (-not (Test-Path $mousePath)) { New-Item -Path $mousePath -Force | Out-Null }
-    Set-ItemProperty -Path $mousePath -Name "MouseSpeed" -Value "0" -Force
-    Set-ItemProperty -Path $mousePath -Name "MouseThreshold1" -Value "0" -Force
-    Set-ItemProperty -Path $mousePath -Name "MouseThreshold2" -Value "0" -Force
-    try { rundll32.exe user32.dll,UpdatePerUserSystemParameters } catch {}
-
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
-    Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
-    $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-    if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
-    Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
-    Write-Host "User preferences applied." -ForegroundColor Green
-
-    Write-Host "Removing Microsoft Edge shortcut from the desktop..."
-    $userDesktop = [Environment]::GetFolderPath("Desktop")
-    $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-    Remove-Item -Path "$userDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$publicDesktop\Microsoft Edge.lnk" -Force -ErrorAction SilentlyContinue
-
-    Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
-    Stop-Process -Name explorer -Force
-    Start-Process explorer.exe -ErrorAction SilentlyContinue
+    Apply-UserPreferences
 
     $desiredName = Prompt-DesiredUserName -DefaultName $env:USERNAME
     if ($desiredName -and ($desiredName -ne $env:USERNAME)) {
@@ -376,10 +380,6 @@ function Start-RenamePhase {
     $finalCmd = "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Final"
     Set-ItemProperty -Path $runOnceKey -Name "ComputerSetupFinal" -Value $finalCmd -Force
 
-    Enable-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
-
     if ($oldUser -and ($oldUser -ne $newUser)) {
         $protected = @("Administrator", "DefaultAccount", "WDAGUtilityAccount")
         if ($protected -notcontains $oldUser) {
@@ -424,6 +424,10 @@ function Start-RenamePhase {
         }
     }
 
+    Enable-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
+
     Write-Host "Rebooting into '$newUser' now..." -ForegroundColor Yellow
     Stop-Transcript
     shutdown.exe /r /f /t 0
@@ -434,6 +438,7 @@ function Start-FinalPhase {
     Ensure-SetupDirs
     $finalLogPath = "C:\Temp\FinalLog.txt"
     Start-Transcript -Path $finalLogPath -Force
+    Apply-UserPreferences
     Show-PasswordChangeNotice
     Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
     Stop-Transcript
