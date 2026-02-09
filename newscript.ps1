@@ -110,7 +110,7 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     $appsAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Apps"
     $appsTrigger = New-ScheduledTaskTrigger -AtLogOn
     $appsTrigger.Enabled = $false
-    $appsPrincipal = New-ScheduledTaskPrincipal -UserId $tempUsername -RunLevel Highest -LogonType InteractiveToken
+    $appsPrincipal = New-ScheduledTaskPrincipal -UserId $tempUsername -RunLevel Highest -LogonType Interactive
     Unregister-ScheduledTask -TaskName $appsTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $appsTaskName -Action $appsAction -Trigger $appsTrigger -Principal $appsPrincipal -Description "Installs applications after user prefs are applied." -Force
     Write-Host "App install task has been staged to run after user preferences." -ForegroundColor Green
@@ -235,5 +235,5 @@ catch {
     $errorMsg = "An unhandled error occurred in phase '$Phase': $_"
     Write-Error $errorMsg
     "$(Get-Date): $errorMsg" | Add-Content -Path "C:\Temp\SetupError.log"
-    if (Get-Transcript) { Stop-Transcript }
+    try { Stop-Transcript } catch {}
 }
