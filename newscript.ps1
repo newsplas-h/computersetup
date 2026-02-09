@@ -1,6 +1,6 @@
 # This parameter allows the script to be called in two different phases.
 param(
-    [ValidateSet('System', 'User', 'Apps', 'Rename', 'Final')]
+    [ValidateSet('System', 'User', 'Apps', 'Rename', 'Final', 'Cleanup')]
     [string]$Phase = 'System'
 )
 
@@ -89,9 +89,12 @@ function Show-PasswordChangeNotice {
     }
 }
 
-function Apply-UserPreferences {
-    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
-    $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion"
+function Apply-UserPreferencesToRoot {
+    param(
+        [string]$Root
+    )
+    $base = $Root.TrimEnd("\")
+    $regPath = "$base\SOFTWARE\Microsoft\Windows\CurrentVersion"
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Themes\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "SnapAssist" -Value 0 -Force
@@ -101,21 +104,26 @@ function Apply-UserPreferences {
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "Hidden" -Value 1 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "LaunchTo" -Value 1 -Force
 
-    $mousePath = "HKCU:\Control Panel\Mouse"
+    $mousePath = "$base\Control Panel\Mouse"
     if (-not (Test-Path $mousePath)) { New-Item -Path $mousePath -Force | Out-Null }
     Set-ItemProperty -Path $mousePath -Name "MouseSpeed" -Value "0" -Force
     Set-ItemProperty -Path $mousePath -Name "MouseThreshold1" -Value "0" -Force
     Set-ItemProperty -Path $mousePath -Name "MouseThreshold2" -Value "0" -Force
-    try { rundll32.exe user32.dll,UpdatePerUserSystemParameters } catch {}
 
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarAl" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Search" -Name "SearchboxTaskbarMode" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarMn" -Value 0 -Force
     Set-ItemProperty -Path "$regPath\Explorer\Advanced" -Name "TaskbarDa" -Value 0 -Force
-    $contextMenuPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+    $contextMenuPath = "$base\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
     if (-not (Test-Path $contextMenuPath)) { New-Item -Path $contextMenuPath -Force | Out-Null }
     Set-ItemProperty -Path $contextMenuPath -Name "(Default)" -Value "" -Force
+}
+
+function Apply-UserPreferences {
+    Write-Host "--- Starting Phase: USER-SPECIFIC PREFERENCES ---" -ForegroundColor Cyan
+    Apply-UserPreferencesToRoot -Root "HKCU:"
+    try { rundll32.exe user32.dll,UpdatePerUserSystemParameters } catch {}
     Write-Host "User preferences applied." -ForegroundColor Green
 
     Write-Host "Removing Microsoft Edge shortcut from the desktop..."
@@ -129,6 +137,45 @@ function Apply-UserPreferences {
     Start-Process explorer.exe -ErrorAction SilentlyContinue
 }
 
+function Apply-UserPreferencesToUser {
+    param(
+        [string]$UserName
+    )
+    if (-not $UserName) { return $false }
+
+    $sid = $null
+    try {
+        $lu = Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue
+        if ($lu) { $sid = $lu.SID.Value }
+    } catch {}
+
+    if ($sid) {
+        $hkuPath = "Registry::HKEY_USERS\$sid"
+        if (Test-Path $hkuPath) {
+            Apply-UserPreferencesToRoot -Root $hkuPath
+            return $true
+        }
+    }
+
+    $profilePath = "C:\Users\$UserName"
+    $ntUser = Join-Path $profilePath "NTUSER.DAT"
+    if (Test-Path $ntUser) {
+        try {
+            reg.exe unload HKU\TempUser | Out-Null
+        } catch {}
+        try {
+            reg.exe load HKU\TempUser $ntUser | Out-Null
+            Apply-UserPreferencesToRoot -Root "Registry::HKEY_USERS\TempUser"
+            reg.exe unload HKU\TempUser | Out-Null
+            return $true
+        } catch {
+            try { reg.exe unload HKU\TempUser | Out-Null } catch {}
+        }
+    }
+
+    return $false
+}
+
 # --- Function for System-Level Operations ---
 function Start-SystemPhase {
     Assert-Admin
@@ -139,6 +186,8 @@ function Start-SystemPhase {
     Unregister-ScheduledTask -TaskName "Run Setup Script at Logon" -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "Cleanup Old Account" -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Cleanup NS Profile" -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Finalize New Account" -Confirm:$false -ErrorAction SilentlyContinue
 
     Write-Host "--- Starting Phase 1: SYSTEM-WIDE PREFERENCES ---" -ForegroundColor Cyan
 
@@ -267,6 +316,17 @@ echo Batch file ran at %date% %time% >> C:\Temp\BatchLog.txt
     Register-ScheduledTask -TaskName $renameTaskName -Action $renameAction -Trigger $renameTrigger -Principal $renamePrincipal -Settings $renameSettings -Description "Creates new admin account and reboots when requested." -Force
     Write-Host "Rename handler task has been staged (startup trigger)." -ForegroundColor Green
 
+    # --- STAGE CLEANUP TASK (RUNS AT LOGON, SYSTEM) ---
+    $cleanupTaskName = "Cleanup NS Profile"
+    $cleanupAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Cleanup"
+    $cleanupTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $cleanupPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+    $cleanupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Unregister-ScheduledTask -TaskName $cleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $cleanupTaskName -Action $cleanupAction -Trigger $cleanupTrigger -Principal $cleanupPrincipal -Settings $cleanupSettings -Description "Removes NS profile before apps install." -Force
+    Disable-ScheduledTask -TaskName $cleanupTaskName -ErrorAction SilentlyContinue
+    Write-Host "Cleanup task has been staged (logon trigger) and disabled." -ForegroundColor Green
+
     # --- STAGE AUTO-LOGON (HIGHLY INSECURE) ---
     Write-Host "Configuring automatic logon. This stores credentials in the registry." -ForegroundColor Red
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
@@ -376,9 +436,69 @@ function Start-RenamePhase {
     Set-ItemProperty -Path $winlogonPath -Name "DefaultPassword" -Value $tempPassword
 
     $localPsScriptPath = "C:\Temp\Setup\usersetup.ps1"
+    # Finalize task (runs as the new user at logon to apply tweaks)
+    $finalTaskName = "Finalize New Account"
+    $finalAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Final"
+    $finalTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $finalPrincipal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$newUser" -RunLevel Highest -LogonType InteractiveToken
+    $finalSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Unregister-ScheduledTask -TaskName $finalTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $finalTaskName -Action $finalAction -Trigger $finalTrigger -Principal $finalPrincipal -Settings $finalSettings -Description "Applies user tweaks for the new account." -Force
+
     $runOnceKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
     $finalCmd = "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Final"
     Set-ItemProperty -Path $runOnceKey -Name "ComputerSetupFinal" -Value $finalCmd -Force
+
+    Enable-ScheduledTask -TaskName "Cleanup NS Profile" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+
+    Write-Host "Rebooting into '$newUser' now..." -ForegroundColor Yellow
+    Stop-Transcript
+    shutdown.exe /r /f /t 0
+}
+
+# --- Function for Final notice (runs as user) ---
+function Start-FinalPhase {
+    Ensure-SetupDirs
+    $finalLogPath = "C:\Temp\FinalLog.txt"
+    Start-Transcript -Path $finalLogPath -Force
+    Apply-UserPreferences
+    Show-PasswordChangeNotice
+    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Finalize New Account" -Confirm:$false -ErrorAction SilentlyContinue
+    Stop-Transcript
+}
+
+# --- Function for Cleanup (runs as SYSTEM at logon) ---
+function Start-CleanupPhase {
+    Assert-Admin
+    Ensure-SetupDirs
+
+    $cleanupLogPath = "C:\Temp\CleanupLog.txt"
+    Start-Transcript -Path $cleanupLogPath -Force
+
+    $info = Read-DesiredUserInfo
+    if (-not $info -or -not $info.NewUser) {
+        Stop-Transcript
+        return
+    }
+
+    $newUser = $info.NewUser
+    $oldUser = $info.OldUser
+
+    $loadedProfiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.Loaded -eq $true -and $_.LocalPath -like "C:\\Users\\NS*" }
+    if ($loadedProfiles) {
+        Write-Warning "NS profile is still loaded. Cleanup will retry on next logon."
+        Stop-Transcript
+        return
+    }
+
+    $applied = Apply-UserPreferencesToUser -UserName $newUser
+    if (-not $applied) {
+        Write-Warning "Could not apply user preferences for '$newUser' yet. Cleanup will retry on next logon."
+        Stop-Transcript
+        return
+    }
 
     if ($oldUser -and ($oldUser -ne $newUser)) {
         $protected = @("Administrator", "DefaultAccount", "WDAGUtilityAccount")
@@ -424,23 +544,20 @@ function Start-RenamePhase {
         }
     }
 
+    $nsStillExists = Test-Path "C:\Users\NS"
+    $nsDotExists = @(Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "NS.*" }).Count -gt 0
+
+    if ($nsStillExists -or $nsDotExists) {
+        Write-Warning "NS profile folders still exist. Cleanup will retry on next logon."
+        Stop-Transcript
+        return
+    }
+
     Enable-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "Cleanup NS Profile" -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
 
-    Write-Host "Rebooting into '$newUser' now..." -ForegroundColor Yellow
-    Stop-Transcript
-    shutdown.exe /r /f /t 0
-}
-
-# --- Function for Final notice (runs as user) ---
-function Start-FinalPhase {
-    Ensure-SetupDirs
-    $finalLogPath = "C:\Temp\FinalLog.txt"
-    Start-Transcript -Path $finalLogPath -Force
-    Apply-UserPreferences
-    Show-PasswordChangeNotice
-    Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
     Stop-Transcript
 }
 
@@ -460,6 +577,9 @@ try {
     }
     elseif ($Phase -eq 'Final') {
         Start-FinalPhase
+    }
+    elseif ($Phase -eq 'Cleanup') {
+        Start-CleanupPhase
     }
 }
 catch {
