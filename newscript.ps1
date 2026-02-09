@@ -440,7 +440,7 @@ function Start-RenamePhase {
     $finalTaskName = "Finalize New Account"
     $finalAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$localPsScriptPath`" -Phase Final"
     $finalTrigger = New-ScheduledTaskTrigger -AtLogOn
-    $finalPrincipal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$newUser" -RunLevel Highest -LogonType InteractiveToken
+    $finalPrincipal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$newUser" -RunLevel Highest -LogonType Interactive
     $finalSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Unregister-ScheduledTask -TaskName $finalTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $finalTaskName -Action $finalAction -Trigger $finalTrigger -Principal $finalPrincipal -Settings $finalSettings -Description "Applies user tweaks for the new account." -Force
@@ -463,6 +463,10 @@ function Start-FinalPhase {
     $finalLogPath = "C:\Temp\FinalLog.txt"
     Start-Transcript -Path $finalLogPath -Force
     Apply-UserPreferences
+    "done" | Out-File -FilePath "C:\Temp\Setup\Final.done" -Encoding ASCII -Force
+    try {
+        Start-ScheduledTask -TaskName "Cleanup NS Profile" -ErrorAction SilentlyContinue
+    } catch {}
     Show-PasswordChangeNotice
     Unregister-ScheduledTask -TaskName "Rename Account and Reboot" -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "Finalize New Account" -Confirm:$false -ErrorAction SilentlyContinue
@@ -485,6 +489,12 @@ function Start-CleanupPhase {
 
     $newUser = $info.NewUser
     $oldUser = $info.OldUser
+
+    if (-not (Test-Path "C:\Temp\Setup\Final.done")) {
+        Write-Warning "Final flag not found yet. Cleanup will retry on next logon."
+        Stop-Transcript
+        return
+    }
 
     $loadedProfiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.Loaded -eq $true -and $_.LocalPath -like "C:\\Users\\NS*" }
     if ($loadedProfiles) {
@@ -557,6 +567,7 @@ function Start-CleanupPhase {
     Start-ScheduledTask -TaskName "Run App Installs Once" -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "Cleanup NS Profile" -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -Path "C:\Temp\Setup\DesiredUser.json" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "C:\Temp\Setup\Final.done" -Force -ErrorAction SilentlyContinue
 
     Stop-Transcript
 }
